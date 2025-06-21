@@ -172,31 +172,38 @@ class OntologizerProcessor {
             }
         }
         
-        // Attempt to find the main content element with a more robust set of selectors
+        // Attempt to find the main content element by finding the element with the most text
         $main_content_selectors = [
             '//article',
             '//main',
             "//*[@role='main']",
             "//*[contains(@class, 'post-content')]",
             "//*[contains(@class, 'entry-content')]",
-            "//*[contains(@id, 'main-content')]",
-            "//*[contains(@class, 'main-content')]",
+            "//*[contains(@id, 'main')]",
+            "//*[contains(@class, 'main')]",
             "//*[contains(@id, 'content')]",
             "//*[contains(@class, 'content')]",
         ];
         
-        $content_node = null;
+        $best_node = null;
+        $max_length = 0;
+
         foreach ($main_content_selectors as $selector) {
             $nodes = $xpath->query($selector);
-            if ($nodes->length > 0) {
-                $content_node = $nodes->item(0);
-                break;
+            if ($nodes) {
+                foreach ($nodes as $node) {
+                    $current_length = strlen(trim($node->nodeValue));
+                    if ($current_length > $max_length) {
+                        $max_length = $current_length;
+                        $best_node = $node;
+                    }
+                }
             }
         }
 
         $text_content = '';
-        if ($content_node) {
-            $text_content = $content_node->nodeValue;
+        if ($best_node) {
+            $text_content = $best_node->nodeValue;
         } else {
             // Fallback to the whole body if a specific content area isn't found
             $body = $dom->getElementsByTagName('body')->item(0);
