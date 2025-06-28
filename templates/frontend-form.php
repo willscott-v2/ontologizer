@@ -7,16 +7,36 @@
         
         <form id="ontologizer-form">
             <div class="form-group">
+                <label><input type="radio" name="input_mode" value="url" checked> Analyze by URL</label>
+                <label style="margin-left:1.5em;"><input type="radio" name="input_mode" value="paste"> Paste Content</label>
+            </div>
+            <div class="form-group" id="url-input-group">
                 <input type="url" 
                        id="ontologizer-url" 
                        name="url" 
                        placeholder="<?php echo esc_attr($atts['placeholder']); ?>" 
-                       required 
                        class="ontologizer-input">
             </div>
-            
+            <div class="form-group" id="paste-input-group" style="display:none;">
+                <textarea id="ontologizer-paste" name="paste_content" rows="10" class="ontologizer-input" placeholder="Paste webpage content here..."></textarea>
+            </div>
+            <div class="form-group">
+                <label for="main-topic-strategy">Main Topic Selection:</label>
+                <select id="main-topic-strategy" name="main_topic_strategy" class="ontologizer-input">
+                    <option value="strict" selected>Strict (title and body)</option>
+                    <option value="title">Title only</option>
+                    <option value="frequent">Most frequent phrase</option>
+                    <option value="pattern">Use page title if it matches a pattern</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="ontologizer-clear-cache" name="clear_cache" value="1">
+                    Override cache for this URL (force fresh analysis)
+                </label>
+            </div>
             <button type="submit" class="ontologizer-button">
-                <span class="button-text">Analyze URL</span>
+                <span class="button-text">Analyze</span>
                 <span class="loading-spinner" style="display: none;">
                     <svg width="20" height="20" viewBox="0 0 24 24">
                         <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="31.416" stroke-dashoffset="31.416">

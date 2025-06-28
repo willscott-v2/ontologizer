@@ -38,4 +38,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Frontend shortcode `[ontologizer]` for easy embedding.
 - Caching of results using WordPress transients.
 - AJAX-powered form for interactive analysis.
-- Basic styling for frontend and admin components. 
+- Basic styling for frontend and admin components.
+
+## [1.6.0] - 2024-06-21
+
+### Added
+- Paste Content option: Users can now paste HTML or visible content for analysis if URL fetch fails or for protected sites.
+- Automatic fallback: If a URL cannot be fetched, the UI prompts the user to paste content.
+- Admin cache log: View and delete individual cached runs from the admin page.
+
+### Changed
+- Main topic/entity extraction now includes page <title> and meta description for improved accuracy.
+- Improved error handling and user prompts for fetch failures.
+
+### Fixed
+- Various UI and UX improvements for fallback and cache management.
+
+## [1.6.1] - 2024-06-21
+
+### Added
+- OpenAI token usage and estimated cost are now tracked and displayed in the Analysis Results section.
+
+### Changed
+- Main topic and entity extraction logic now prioritizes title, meta description, and headings for more accurate topic detection and salience.
+- Only truly off-topic entities are marked as irrelevant; subdomains and solutions are now correctly grouped and scored.
+
+### Fixed
+- Improved consistency between entity relevance and recommendations.
+
+## [1.7.0] - 2024-06-21
+
+### Added
+- Combined main topic logic: If two top entities appear together in the title, meta, or headings, the plugin will use the combined phrase as the main topic (e.g., 'Higher Education Digital Marketing').
+
+### Changed
+- Improved main topic detection for intersectional/compound topics.
+
+## [1.7.1] - 2024-06-21
+
+### Added
+- Improved combined entity detection: Finds the longest relevant phrase from top entities in title/meta/headings for main topic.
+- Sub-entity inclusion: Ensures important sub-entities (e.g., 'Higher Education') are included if present in title/meta/headings.
+
+### Changed
+- More robust main topic and entity extraction for intersectional/compound topics.
+
+## [1.7.2] - 2024-06-21
+
+### Fixed
+- Always includes capitalized n-grams (e.g., 'Higher Education') from title/meta/headings/URL as entities, ensuring core topics are never missed.
+
+## [1.7.4] - Improved entity identification, main topic extraction, and developer attribution to Will Scott
+
+## [1.8.0] - Added front-end cache override option for users to force fresh analysis of a URL. Minor improvements to main topic selection flexibility.
+
+## [1.9.0] - Improved main topic extraction: Now automatically detects course/program names from page titles (e.g., "AI Marketing Course"). Enhanced phrase detection for better topic identification.
+
+## [1.10.0] - Improved contextual entity handling for Person topics: cuisine, city, organization, restaurant, place, location, and region are no longer flagged as off-topic.
+
+## [1.11.0] - Improved salience tips for Person topics: now recommends strengthening connections to contextually relevant entities (cuisine, city, organization, restaurant, place, location, region, book, TV show) instead of removing them.
+
+## [1.12.0] - Recommendations now default to aligning/integrating related entities with the main topic, only suggesting removal for truly irrelevant content.
+
+## [1.13.0] - Entities present in the title, headings, or more than once in the body are never flagged as irrelevant.
+
+## [Unreleased]
+- Improved entity identification and main topic extraction logic
+- Main topic now prefers exact phrase matches and boosts Person/Organization entities
+- Entities are enriched with type information (Person, Organization, etc.) for better topic selection 

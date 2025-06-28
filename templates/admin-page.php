@@ -45,6 +45,12 @@
             <span class="spinner"></span>
             <p id="ontologizer-cache-feedback" class="ontologizer-cache-feedback" style="display:none;"></p>
         </div>
+        <div class="ontologizer-admin-cache-log">
+            <h2><?php _e('Cached Runs Log', 'ontologizer'); ?></h2>
+            <div id="ontologizer-cache-log-list">
+                <p><?php _e('Loading cached runs...', 'ontologizer'); ?></p>
+            </div>
+        </div>
     </div>
     
     <div class="ontologizer-admin-footer">
@@ -58,4 +64,63 @@
             ?>
         </p>
     </div>
-</div> 
+</div>
+<script>
+jQuery(document).ready(function($) {
+    function loadCacheLog() {
+        var list = $('#ontologizer-cache-log-list');
+        list.html('<p>Loading cached runs...</p>');
+        $.ajax({
+            url: ontologizer_admin_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ontologizer_list_cache',
+                nonce: ontologizer_admin_ajax.nonce
+            },
+            success: function(response) {
+                if (response.success && response.data.length > 0) {
+                    var html = '<table class="widefat"><thead><tr><th>URL</th><th>Primary Topic</th><th>Salience</th><th>Confidence</th><th>Action</th></tr></thead><tbody>';
+                    response.data.forEach(function(entry) {
+                        html += '<tr>' +
+                            '<td style="word-break:break-all">' + (entry.url || '-') + '</td>' +
+                            '<td>' + (entry.primary_topic || '-') + '</td>' +
+                            '<td>' + (entry.topical_salience || '-') + '%</td>' +
+                            '<td>' + (entry.main_topic_confidence || '-') + '%</td>' +
+                            '<td><button class="button delete-cache-entry" data-cache-key="' + entry.cache_key + '">Delete</button></td>' +
+                            '</tr>';
+                    });
+                    html += '</tbody></table>';
+                    list.html(html);
+                } else {
+                    list.html('<p>No cached runs found.</p>');
+                }
+            },
+            error: function() {
+                list.html('<p>Error loading cache log.</p>');
+            }
+        });
+    }
+    loadCacheLog();
+    $(document).on('click', '.delete-cache-entry', function() {
+        var btn = $(this);
+        var key = btn.data('cache-key');
+        btn.prop('disabled', true).text('Deleting...');
+        $.ajax({
+            url: ontologizer_admin_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ontologizer_delete_cache_entry',
+                nonce: ontologizer_admin_ajax.nonce,
+                cache_key: key
+            },
+            success: function(response) {
+                loadCacheLog();
+            },
+            error: function() {
+                btn.prop('disabled', false).text('Delete');
+                alert('Error deleting cache entry.');
+            }
+        });
+    });
+});
+</script> 

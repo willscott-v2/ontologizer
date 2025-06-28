@@ -5,6 +5,46 @@ class OntologizerProcessor {
     private $api_keys = array();
     private $cache_duration;
     private $rate_limit_delay;
+    private $openai_token_usage = 0;
+    private $openai_cost_usd = 0.0;
+    
+    // Synonym/alias map for flexible entity matching
+    private static $entity_synonyms = [
+        'seo' => ['search engine optimization', 'seo'],
+        'search engine optimization' => ['seo', 'search engine optimization'],
+        'ppc' => ['pay per click', 'ppc'],
+        'pay per click' => ['ppc', 'pay per click'],
+        'sem' => ['search engine marketing', 'sem'],
+        'search engine marketing' => ['sem', 'search engine marketing'],
+        'higher education' => ['higher education', 'university', 'college'],
+        'digital marketing' => ['digital marketing', 'online marketing'],
+        'content marketing' => ['content marketing'],
+        'smm' => ['social media marketing', 'smm'],
+        'social media marketing' => ['smm', 'social media marketing'],
+        // Add more as needed
+    ];
+
+    // Normalize a string to its canonical synonym key (lowercase, trimmed)
+    private static function normalize_entity($entity) {
+        $entity_lc = strtolower(trim($entity));
+        foreach (self::$entity_synonyms as $key => $aliases) {
+            if (in_array($entity_lc, $aliases)) {
+                return $key;
+            }
+        }
+        return $entity_lc;
+    }
+
+    // Get all synonym/alias variants for an entity
+    private static function get_entity_variants($entity) {
+        $entity_lc = strtolower(trim($entity));
+        foreach (self::$entity_synonyms as $key => $aliases) {
+            if (in_array($entity_lc, $aliases)) {
+                return $aliases;
+            }
+        }
+        return [$entity_lc];
+    }
     
     public function __construct() {
         $this->api_keys = array(
@@ -15,7 +55,7 @@ class OntologizerProcessor {
         $this->rate_limit_delay = get_option('ontologizer_rate_limit_delay', 0.2);
     }
     
-    public function process_url($url) {
+    public function process_url($url, $main_topic_strategy = 'strict') {
         // Allow this script to run for up to 3 minutes to prevent timeouts on complex pages.
         @set_time_limit(180);
 
@@ -29,6 +69,9 @@ class OntologizerProcessor {
         $cached_result = get_transient($cache_key);
         if ($cached_result !== false) {
             $cached_result['cached'] = true; // Add flag to indicate cached result
+            $cached_result['openai_token_usage'] = $this->openai_token_usage;
+            $cached_result['openai_cost_usd'] = round($this->openai_cost_usd, 6);
+            $cached_result['page_title'] = $cached_result['entities'][0]['name'];
             return $cached_result;
         }
         
@@ -40,6 +83,7 @@ class OntologizerProcessor {
         
         // Step 2: Extract named entities
         $start_time = microtime(true);
+        $text_parts = $this->extract_text_from_html($html_content);
         $entities = $this->extract_entities($html_content);
         error_log(sprintf('Ontologizer: Entity extraction took %.2f seconds.', microtime(true) - $start_time));
         
@@ -58,22 +102,182 @@ class OntologizerProcessor {
         
         // Step 6: Calculate Topical Salience Score
         $topical_salience = $this->calculate_topical_salience_score($enriched_entities);
-        $primary_topic = !empty($enriched_entities) ? $enriched_entities[0]['name'] : null;
-        
+        $main_topic = $entities[0] ?? null;
+        $search_fields = [strtolower($text_parts['title']), strtolower($text_parts['meta'])];
+        foreach ($text_parts['headings'] as $h) { $search_fields[] = strtolower($h); }
+        $top_entities = array_slice($entities, 0, 5);
+        $combos = self::get_entity_combinations($top_entities, 3);
+        $best_score = 0;
+        $best_combo = '';
+        $best_combo_type = '';
+        $entity_types = [];
+        foreach ($enriched_entities as $e) {
+            $entity_types[strtolower($e['name'])] = $e['type'] ?? '';
+        }
+        // Main topic selection strategy
+        // Always prefer the longest capitalized phrase in the title that ends with Course/Program/Certificate/Workshop/Seminar
+        $title_phrase = null;
+        if (preg_match_all('/([A-Z][a-zA-Z]*(?: [A-Z][a-zA-Z]*)* (Course|Program|Certificate|Workshop|Seminar))/i', $text_parts['title'], $matches)) {
+            if (!empty($matches[0])) {
+                usort($matches[0], function($a, $b) { return strlen($b) - strlen($a); });
+                $title_phrase = trim($matches[0][0]);
+            }
+        }
+        if ($title_phrase) {
+            $main_topic = $title_phrase;
+        } else if ($main_topic_strategy === 'title') {
+            // Use the longest entity/phrase that appears in the title
+            $title_lc = strtolower($text_parts['title']);
+            $candidates = array_filter($entities, function($e) use ($title_lc) {
+                return strpos($title_lc, strtolower($e)) !== false;
+            });
+            if (!empty($candidates)) {
+                usort($candidates, function($a, $b) { return strlen($b) - strlen($a); });
+                $main_topic = $candidates[0];
+            }
+        } else if ($main_topic_strategy === 'frequent') {
+            // Use the most frequent entity/phrase in the body
+            $body_lc = strtolower($text_parts['body']);
+            $freqs = [];
+            foreach ($entities as $e) {
+                $freqs[$e] = substr_count($body_lc, strtolower($e));
+            }
+            arsort($freqs);
+            $main_topic = key($freqs);
+        } else if ($main_topic_strategy === 'pattern') {
+            // Use the page title if it matches a pattern (e.g., multi-word noun phrase)
+            if (preg_match('/([A-Z][a-z]+( [A-Z][a-z]+)+)/', $text_parts['title'], $matches)) {
+                $main_topic = $matches[1];
+            }
+        } else { // strict (default)
+            // Prefer exact phrase matches for combos (must appear in title and body)
+            foreach ($combos as $combo_arr) {
+                $variant_lists = array_map([self::class, 'get_entity_variants'], $combo_arr);
+                $all_variants = [[]];
+                foreach ($variant_lists as $variants) {
+                    $new = [];
+                    foreach ($all_variants as $prefix) {
+                        foreach ($variants as $v) {
+                            $new[] = array_merge($prefix, [$v]);
+                        }
+                    }
+                    $all_variants = $new;
+                }
+                foreach ($all_variants as $variant_combo) {
+                    $phrase = implode(' ', $variant_combo);
+                    $in_title = strpos(strtolower($text_parts['title']), strtolower($phrase)) !== false;
+                    $in_body = strpos(strtolower($text_parts['body']), strtolower($phrase)) !== false;
+                    if ($in_title && $in_body) {
+                        $score = 200 + strlen($phrase);
+                        $types = array_map(function($v) use ($entity_types) { return $entity_types[strtolower($v)] ?? ''; }, $variant_combo);
+                        if (count(array_unique($types)) === 1 && in_array($types[0], ['person','organization'])) {
+                            $score += 100;
+                        }
+                        if ($score > $best_score) {
+                            $best_score = $score;
+                            $best_combo = $phrase;
+                            $best_combo_type = $types[0] ?? '';
+                        }
+                    }
+                }
+            }
+            $single_entity_boosted = false;
+            foreach ($enriched_entities as $e) {
+                $name_lc = strtolower($e['name']);
+                $type = $e['type'] ?? '';
+                if (in_array($type, ['person','organization']) && $e['confidence_score'] > 60) {
+                    foreach ($search_fields as $field) {
+                        if (strpos($field, $name_lc) !== false) {
+                            $main_topic = $e['name'];
+                            $single_entity_boosted = true;
+                            break 2;
+                        }
+                    }
+                }
+            }
+            if (!$single_entity_boosted && $best_combo) {
+                $main_topic = $best_combo;
+            }
+        }
+        // Add sub-entities from multi-word entities if present in title/meta/headings
+        $entity_set = array_map('strtolower', $entities);
+        foreach ($entities as $entity) {
+            $words = explode(' ', $entity);
+            if (count($words) > 1) {
+                for ($i = 0; $i < count($words); $i++) {
+                    for ($j = $i+1; $j <= count($words); $j++) {
+                        $sub = trim(implode(' ', array_slice($words, $i, $j-$i)));
+                        if (strlen($sub) > 2 && !in_array(strtolower($sub), $entity_set)) {
+                            foreach ($search_fields as $field) {
+                                if (strpos($field, strtolower($sub)) !== false) {
+                                    $entities[] = $sub;
+                                    $entity_set[] = strtolower($sub);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Add n-gram (2-3 word) capitalized phrases from title/meta/headings/URL as entities if not present
+        $sources = [$text_parts['title'], $text_parts['meta']];
+        foreach ($text_parts['headings'] as $h) { $sources[] = $h; }
+        // Add URL path as a source
+        if (!empty($url)) {
+            $parsed_url = parse_url($url);
+            if (!empty($parsed_url['path'])) {
+                $sources[] = str_replace(['-', '_', '/'], ' ', $parsed_url['path']);
+            }
+        }
+        $entity_set = array_map('strtolower', $entities);
+        $forced_ngrams = [];
+        foreach ($sources as $src) {
+            preg_match_all('/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/', $src, $matches);
+            foreach ($matches[1] as $ngram) {
+                $ngram_lc = strtolower($ngram);
+                if (!in_array($ngram_lc, $entity_set)) {
+                    $entities[] = $ngram;
+                    $entity_set[] = $ngram_lc;
+                    $forced_ngrams[] = $ngram;
+                }
+            }
+        }
+        if (!empty($forced_ngrams)) {
+            error_log('Ontologizer: Force-added n-grams: ' . implode(', ', $forced_ngrams));
+        }
+        $irrelevant_entities = [];
+        foreach ($enriched_entities as $entity) {
+            $entity_lc = strtolower($entity['name']);
+            $in_title = strpos(strtolower($text_parts['title']), $entity_lc) !== false;
+            $in_headings = false;
+            foreach ($text_parts['headings'] as $h) { if (strpos(strtolower($h), $entity_lc) !== false) $in_headings = true; }
+            $in_body = substr_count(strtolower($text_parts['body']), $entity_lc) > 1;
+            if (!$in_title && !$in_headings && !$in_body) {
+                $irrelevant_entities[] = $entity['name'];
+            }
+        }
+        $salience_tips = $this->get_salience_improvement_tips($main_topic, $irrelevant_entities);
         $result = array(
             'url' => $url,
             'entities' => $enriched_entities,
             'json_ld' => $json_ld,
             'recommendations' => $recommendations,
             'topical_salience' => $topical_salience,
-            'primary_topic' => $primary_topic,
+            'primary_topic' => $main_topic,
+            'main_topic_confidence' => !empty($enriched_entities) ? $enriched_entities[0]['confidence_score'] : 0,
+            'salience_tips' => $salience_tips,
+            'irrelevant_entities' => $irrelevant_entities,
             'processing_time' => microtime(true) - $_SERVER['REQUEST_TIME_FLOAT'],
             'entities_count' => count($enriched_entities),
             'enriched_count' => count(array_filter($enriched_entities, function($e) {
                 return !empty($e['wikipedia_url']) || !empty($e['wikidata_url']) || 
                        !empty($e['google_kg_url']) || !empty($e['productontology_url']);
             })),
-            'cached' => false
+            'cached' => false,
+            'timestamp' => time(),
+            'page_title' => $text_parts['title'],
+            'openai_token_usage' => $this->openai_token_usage,
+            'openai_cost_usd' => round($this->openai_cost_usd, 6),
         );
         
         // Cache the result
@@ -127,31 +331,84 @@ class OntologizerProcessor {
     
     private function extract_entities($html_content) {
         // Clean HTML and extract text content
-        $text_content = $this->extract_text_from_html($html_content);
-        
+        $text_parts = $this->extract_text_from_html($html_content);
+        $title = strtolower($text_parts['title']);
+        $meta = strtolower($text_parts['meta']);
+        $headings = array_map('strtolower', $text_parts['headings']);
+        $body = strtolower($text_parts['body']);
         // Use OpenAI API for entity extraction if available
         if (!empty($this->api_keys['openai'])) {
-            $entities = $this->extract_entities_openai($text_content);
+            $entities = $this->extract_entities_openai($text_parts['title'] . '. ' . $text_parts['meta'] . '. ' . implode('. ', $text_parts['headings']) . '. ' . $text_parts['body']);
             if (!empty($entities)) {
                 return $entities;
             }
         }
-        
         // Fallback to improved basic entity extraction
-        return $this->extract_entities_basic($text_content);
+        $entities = $this->extract_entities_basic($text_parts['title'] . '. ' . $text_parts['meta'] . '. ' . implode('. ', $text_parts['headings']) . '. ' . $text_parts['body']);
+        // Score entities
+        $scored = [];
+        $domain_keywords = ['application security','cloud security','information security','infrastructure security','network security','end-user education','disaster recovery','business continuity','identity and access management','data security'];
+        $threat_keywords = ['phishing','ransomware','malware','social engineering','advanced persistent threat','denial of service','ddos','sql injection','botnet'];
+        $solution_keywords = ['zero trust','bot protection','fraud protection','ddos protection','app security','api security'];
+        foreach ($entities as $entity) {
+            $entity_lc = strtolower($entity);
+            $score = 0;
+            if (strpos($title, $entity_lc) !== false) $score += 30;
+            if (strpos($meta, $entity_lc) !== false) $score += 15;
+            foreach ($headings as $h) { if (strpos($h, $entity_lc) !== false) $score += 10; }
+            $score += substr_count($body, $entity_lc) * 2;
+            // Grouping
+            $group = 'other';
+            foreach ($domain_keywords as $k) if (strpos($entity_lc, $k) !== false) $group = 'domain';
+            foreach ($threat_keywords as $k) if (strpos($entity_lc, $k) !== false) $group = 'threat';
+            foreach ($solution_keywords as $k) if (strpos($entity_lc, $k) !== false) $group = 'solution';
+            $scored[] = [ 'name' => $entity, 'score' => $score, 'group' => $group ];
+        }
+        // Sort by score desc
+        usort($scored, function($a, $b) { return $b['score'] - $a['score']; });
+        // Return just the names, sorted
+        return array_column($scored, 'name');
     }
     
+    private function extract_headings($dom) {
+        $headings = [];
+        foreach (['h1', 'h2', 'h3'] as $tag) {
+            $nodes = $dom->getElementsByTagName($tag);
+            foreach ($nodes as $node) {
+                $headings[] = trim($node->nodeValue);
+            }
+        }
+        return $headings;
+    }
+
     private function extract_text_from_html($html) {
         if (empty($html)) {
-            return '';
+            return [
+                'title' => '',
+                'meta' => '',
+                'headings' => [],
+                'body' => ''
+            ];
         }
-
         $dom = new DOMDocument();
-        // Suppress warnings from malformed HTML
         @$dom->loadHTML('<?xml encoding="utf-8" ?>' . $html);
-        
         $xpath = new DOMXPath($dom);
-
+        // Extract <title>
+        $title = '';
+        $titleNodes = $dom->getElementsByTagName('title');
+        if ($titleNodes->length > 0) {
+            $title = trim($titleNodes->item(0)->nodeValue);
+        }
+        // Extract meta description
+        $metaDesc = '';
+        foreach ($dom->getElementsByTagName('meta') as $meta) {
+            if (strtolower($meta->getAttribute('name')) === 'description') {
+                $metaDesc = trim($meta->getAttribute('content'));
+                break;
+            }
+        }
+        // Extract headings
+        $headings = $this->extract_headings($dom);
         // Remove elements that are typically not part of the main content
         $selectors_to_remove = [
             "//script", "//style", "//noscript", "//header", "//footer", "//nav", "//aside", "//form",
@@ -217,7 +474,12 @@ class OntologizerProcessor {
         $text = strip_tags($text);
         $text = preg_replace('/\s+/', ' ', $text);
         
-        return trim($text);
+        return [
+            'title' => $title,
+            'meta' => $metaDesc,
+            'headings' => $headings,
+            'body' => trim($text)
+        ];
     }
     
     private function extract_entities_openai($text) {
@@ -252,6 +514,16 @@ class OntologizerProcessor {
             $content = json_decode($data['choices'][0]['message']['content'], true);
             
             if (isset($content['entities']) && is_array($content['entities'])) {
+                // Track token usage and cost
+                if (isset($data['usage'])) {
+                    $tokens = $data['usage']['total_tokens'] ?? 0;
+                    $prompt_tokens = $data['usage']['prompt_tokens'] ?? 0;
+                    $completion_tokens = $data['usage']['completion_tokens'] ?? 0;
+                    $this->openai_token_usage += $tokens;
+                    // GPT-4o pricing (June 2024): $0.000005/input, $0.000015/output
+                    $cost = ($prompt_tokens * 0.000005) + ($completion_tokens * 0.000015);
+                    $this->openai_cost_usd += $cost;
+                }
                 return $content['entities'];
             }
         }
@@ -313,7 +585,8 @@ class OntologizerProcessor {
                 'wikidata_url' => null,
                 'google_kg_url' => null,
                 'productontology_url' => null,
-                'confidence_score' => round($relevance_score)
+                'confidence_score' => round($relevance_score),
+                'type' => null // Add type field
             );
             
             // Enrich with Wikipedia
@@ -333,6 +606,9 @@ class OntologizerProcessor {
             
             // Enrich with ProductOntology
             $enriched_entity['productontology_url'] = $this->find_productontology_url($entity);
+            
+            // Try to determine type (Person, Organization, etc.)
+            $enriched_entity['type'] = $this->detect_entity_type($enriched_entity);
             
             // Update confidence score based on found sources
             $enriched_entity['confidence_score'] = $this->calculate_confidence_score($enriched_entity, $relevance_score);
@@ -537,7 +813,7 @@ class OntologizerProcessor {
         $entity_names = array_column($enriched_entities, 'name');
         
         foreach ($entity_names as $entity) {
-            $count = substr_count(strtolower($text_content), strtolower($entity));
+            $count = substr_count(strtolower($text_content['body']), strtolower($entity));
             if ($count <= 1) {
                 $recommendations[] = "Consider expanding coverage of '{$entity}' with additional context, examples, or data to build more topical authority.";
             }
@@ -561,7 +837,7 @@ class OntologizerProcessor {
         $prompt = "You are a world-class Semantic SEO strategist, specializing in topical authority and schema optimization. Analyze the following webpage content and its most salient topical entities to provide expert, actionable recommendations for improving its semantic density and authority.
 
         **Page Text Summary:**
-        " . substr($text_content, 0, 2500) . "...
+        " . substr($text_content['body'], 0, 2500) . "...
 
         **Most Salient Topical Entities Identified:**
         {$entity_list_str}
@@ -608,6 +884,15 @@ class OntologizerProcessor {
             $content = json_decode($data['choices'][0]['message']['content'], true);
             
             if (isset($content['recommendations']) && is_array($content['recommendations'])) {
+                // Track token usage and cost
+                if (isset($data['usage'])) {
+                    $tokens = $data['usage']['total_tokens'] ?? 0;
+                    $prompt_tokens = $data['usage']['prompt_tokens'] ?? 0;
+                    $completion_tokens = $data['usage']['completion_tokens'] ?? 0;
+                    $this->openai_token_usage += $tokens;
+                    $cost = ($prompt_tokens * 0.000005) + ($completion_tokens * 0.000015);
+                    $this->openai_cost_usd += $cost;
+                }
                 return $content['recommendations'];
             }
         }
@@ -623,7 +908,7 @@ class OntologizerProcessor {
         $entity_names = array_column($enriched_entities, 'name');
         
         foreach ($entity_names as $entity) {
-            $count = substr_count(strtolower($text_content), strtolower($entity));
+            $count = substr_count(strtolower($text_content['body']), strtolower($entity));
             if ($count <= 1) {
                 $recommendations[] = "Consider expanding coverage of '{$entity}' with additional context, examples, or data to build more topical authority.";
             }
@@ -659,5 +944,325 @@ class OntologizerProcessor {
         $final_score = ($avg_score_component * 0.5) + ($high_confidence_component * 0.35) + ($kg_mid_component * 0.15);
 
         return round($final_score);
+    }
+
+    public function get_cache_summary($cache_data) {
+        // Returns a summary for admin listing
+        return array(
+            'url' => $cache_data['url'] ?? '',
+            'primary_topic' => $cache_data['primary_topic'] ?? '',
+            'main_topic_confidence' => $cache_data['entities'][0]['confidence_score'] ?? 0,
+            'topical_salience' => $cache_data['topical_salience'] ?? 0,
+            'timestamp' => $cache_data['timestamp'] ?? '',
+        );
+    }
+
+    public function identify_irrelevant_entities($enriched_entities, $main_topic) {
+        // Improved: Do not flag as irrelevant any entity present in the title, headings, or more than once in the body
+        $irrelevant = array();
+        $main_topic_lc = strtolower($main_topic);
+        $main_topic_type = null;
+        $text_parts = isset($this->last_text_parts) ? $this->last_text_parts : null;
+        $title = $text_parts ? strtolower($text_parts['title']) : '';
+        $headings = $text_parts ? array_map('strtolower', $text_parts['headings']) : array();
+        $body = $text_parts ? strtolower($text_parts['body']) : '';
+        foreach ($enriched_entities as $entity) {
+            $entity_lc = strtolower($entity['name']);
+            $in_title = strpos($title, $entity_lc) !== false;
+            $in_headings = false;
+            foreach ($headings as $h) { if (strpos($h, $entity_lc) !== false) $in_headings = true; }
+            $in_body = substr_count($body, $entity_lc) > 1;
+            if ($in_title || $in_headings || $in_body) {
+                continue; // Never flag as irrelevant
+            }
+            if ($entity['confidence_score'] < 40 || (strcasecmp($entity['name'], $main_topic) !== 0 && $entity['confidence_score'] < 60)) {
+                $irrelevant[] = $entity['name'];
+            }
+        }
+        return $irrelevant;
+    }
+
+    public function get_salience_improvement_tips($main_topic, $irrelevant_entities) {
+        $tips = array();
+        $tips[] = "Increase the frequency and contextual relevance of your main topic ('{$main_topic}') throughout the content.";
+        // Determine if main topic is a Person and if there are contextually relevant entities
+        $contextual_types = ['cuisine', 'city', 'organization', 'restaurant', 'place', 'location', 'region', 'creative work', 'book', 'tv show'];
+        $main_topic_type = null;
+        if (isset($this->last_enriched_entities)) {
+            foreach ($this->last_enriched_entities as $entity) {
+                if (strcasecmp($entity['name'], $main_topic) === 0 && !empty($entity['type'])) {
+                    $main_topic_type = $entity['type'];
+                    break;
+                }
+            }
+        }
+        $contextual_entities = array();
+        if (isset($this->last_enriched_entities)) {
+            foreach ($this->last_enriched_entities as $entity) {
+                $entity_type = strtolower($entity['type'] ?? '');
+                if ($main_topic_type === 'person' && in_array($entity_type, $contextual_types)) {
+                    $contextual_entities[] = $entity['name'];
+                }
+            }
+        }
+        if ($main_topic_type === 'person' && !empty($contextual_entities)) {
+            $tips[] = "Strengthen the narrative connection to related entities like: " . implode(', ', $contextual_entities) . ". These entities provide essential context and support topical authority.";
+        } elseif (!empty($irrelevant_entities)) {
+            $tips[] = "Align or integrate related entities with your main topic where possible. Only consider removing content if it is truly irrelevant or off-topic: " . implode(', ', $irrelevant_entities) . ".";
+        }
+        $tips[] = "Add more detailed sections, examples, or FAQs about '{$main_topic}' to boost topical authority.";
+        return $tips;
+    }
+
+    public function get_enriched_entities_with_irrelevance($enriched_entities, $main_topic) {
+        $irrelevant = $this->identify_irrelevant_entities($enriched_entities, $main_topic);
+        foreach ($enriched_entities as &$entity) {
+            $entity['irrelevant'] = in_array($entity['name'], $irrelevant);
+        }
+        return $enriched_entities;
+    }
+
+    public function process_pasted_content($content, $main_topic_strategy = 'strict') {
+        // Step 1: Use provided content as HTML/text
+        $html_content = $content;
+        // Step 2: Extract named entities
+        $start_time = microtime(true);
+        $text_parts = $this->extract_text_from_html($html_content);
+        $entities = $this->extract_entities($html_content);
+        error_log(sprintf('Ontologizer: Entity extraction (pasted) took %.2f seconds.', microtime(true) - $start_time));
+        // Step 3: Enrich entities with external data
+        $start_time = microtime(true);
+        $enriched_entities = $this->enrich_entities($entities);
+        error_log(sprintf('Ontologizer: Entity enrichment (pasted) took %.2f seconds.', microtime(true) - $start_time));
+        // Step 4: Generate JSON-LD schema
+        $json_ld = $this->generate_json_ld($enriched_entities, '');
+        // Step 5: Analyze content and provide recommendations
+        $start_time = microtime(true);
+        $recommendations = $this->analyze_content($html_content, $enriched_entities);
+        error_log(sprintf('Ontologizer: Recommendation generation (pasted) took %.2f seconds.', microtime(true) - $start_time));
+        // Step 6: Calculate Topical Salience Score
+        $topical_salience = $this->calculate_topical_salience_score($enriched_entities);
+        $main_topic = $entities[0] ?? null;
+        $search_fields = [strtolower($text_parts['title']), strtolower($text_parts['meta'])];
+        $top_entities = array_slice($entities, 0, 5);
+        $combos = self::get_entity_combinations($top_entities, 3);
+        $best_score = 0;
+        $best_combo = '';
+        $best_combo_type = '';
+        $entity_types = [];
+        foreach ($enriched_entities as $e) {
+            $entity_types[strtolower($e['name'])] = $e['type'] ?? '';
+        }
+        // Main topic selection strategy
+        // Always prefer the longest capitalized phrase in the title that ends with Course/Program/Certificate/Workshop/Seminar
+        $title_phrase = null;
+        if (preg_match_all('/([A-Z][a-zA-Z]*(?: [A-Z][a-zA-Z]*)* (Course|Program|Certificate|Workshop|Seminar))/i', $text_parts['title'], $matches)) {
+            if (!empty($matches[0])) {
+                usort($matches[0], function($a, $b) { return strlen($b) - strlen($a); });
+                $title_phrase = trim($matches[0][0]);
+            }
+        }
+        if ($title_phrase) {
+            $main_topic = $title_phrase;
+        } else if ($main_topic_strategy === 'title') {
+            // Use the longest entity/phrase that appears in the title
+            $title_lc = strtolower($text_parts['title']);
+            $candidates = array_filter($entities, function($e) use ($title_lc) {
+                return strpos($title_lc, strtolower($e)) !== false;
+            });
+            if (!empty($candidates)) {
+                usort($candidates, function($a, $b) { return strlen($b) - strlen($a); });
+                $main_topic = $candidates[0];
+            }
+        } else if ($main_topic_strategy === 'frequent') {
+            // Use the most frequent entity/phrase in the body
+            $body_lc = strtolower($text_parts['body']);
+            $freqs = [];
+            foreach ($entities as $e) {
+                $freqs[$e] = substr_count($body_lc, strtolower($e));
+            }
+            arsort($freqs);
+            $main_topic = key($freqs);
+        } else if ($main_topic_strategy === 'pattern') {
+            // Use the page title if it matches a pattern (e.g., multi-word noun phrase)
+            if (preg_match('/([A-Z][a-z]+( [A-Z][a-z]+)+)/', $text_parts['title'], $matches)) {
+                $main_topic = $matches[1];
+            }
+        } else { // strict (default)
+            // Prefer exact phrase matches for combos (must appear in title and body)
+            foreach ($combos as $combo_arr) {
+                $variant_lists = array_map([self::class, 'get_entity_variants'], $combo_arr);
+                $all_variants = [[]];
+                foreach ($variant_lists as $variants) {
+                    $new = [];
+                    foreach ($all_variants as $prefix) {
+                        foreach ($variants as $v) {
+                            $new[] = array_merge($prefix, [$v]);
+                        }
+                    }
+                    $all_variants = $new;
+                }
+                foreach ($all_variants as $variant_combo) {
+                    $phrase = implode(' ', $variant_combo);
+                    $in_title = strpos(strtolower($text_parts['title']), strtolower($phrase)) !== false;
+                    $in_body = strpos(strtolower($text_parts['body']), strtolower($phrase)) !== false;
+                    if ($in_title && $in_body) {
+                        $score = 200 + strlen($phrase);
+                        $types = array_map(function($v) use ($entity_types) { return $entity_types[strtolower($v)] ?? ''; }, $variant_combo);
+                        if (count(array_unique($types)) === 1 && in_array($types[0], ['person','organization'])) {
+                            $score += 100;
+                        }
+                        if ($score > $best_score) {
+                            $best_score = $score;
+                            $best_combo = $phrase;
+                            $best_combo_type = $types[0] ?? '';
+                        }
+                    }
+                }
+            }
+            $single_entity_boosted = false;
+            foreach ($enriched_entities as $e) {
+                $name_lc = strtolower($e['name']);
+                $type = $e['type'] ?? '';
+                if (in_array($type, ['person','organization']) && $e['confidence_score'] > 60) {
+                    foreach ($search_fields as $field) {
+                        if (strpos($field, $name_lc) !== false) {
+                            $main_topic = $e['name'];
+                            $single_entity_boosted = true;
+                            break 2;
+                        }
+                    }
+                }
+            }
+            if (!$single_entity_boosted && $best_combo) {
+                $main_topic = $best_combo;
+            }
+        }
+        $irrelevant_entities = [];
+        foreach ($enriched_entities as $entity) {
+            $entity_lc = strtolower($entity['name']);
+            $in_title = strpos(strtolower($text_parts['title']), $entity_lc) !== false;
+            $in_headings = false;
+            foreach ($text_parts['headings'] as $h) { if (strpos(strtolower($h), $entity_lc) !== false) $in_headings = true; }
+            $in_body = substr_count(strtolower($text_parts['body']), $entity_lc) > 1;
+            if (!$in_title && !$in_headings && !$in_body) {
+                $irrelevant_entities[] = $entity['name'];
+            }
+        }
+        $salience_tips = $this->get_salience_improvement_tips($main_topic, $irrelevant_entities);
+        $result = array(
+            'url' => '',
+            'entities' => $enriched_entities,
+            'json_ld' => $json_ld,
+            'recommendations' => $recommendations,
+            'topical_salience' => $topical_salience,
+            'primary_topic' => $main_topic,
+            'main_topic_confidence' => !empty($enriched_entities) ? $enriched_entities[0]['confidence_score'] : 0,
+            'salience_tips' => $salience_tips,
+            'irrelevant_entities' => $irrelevant_entities,
+            'processing_time' => microtime(true) - $_SERVER['REQUEST_TIME_FLOAT'],
+            'entities_count' => count($enriched_entities),
+            'enriched_count' => count(array_filter($enriched_entities, function($e) {
+                return !empty($e['wikipedia_url']) || !empty($e['wikidata_url']) || 
+                       !empty($e['google_kg_url']) || !empty($e['productontology_url']);
+            })),
+            'cached' => false,
+            'timestamp' => time(),
+            'pasted_content' => true,
+            'openai_token_usage' => $this->openai_token_usage,
+            'openai_cost_usd' => round($this->openai_cost_usd, 6),
+        );
+        return $result;
+    }
+
+    // Helper: Generate all unique pairs/triples of entities (orderings included)
+    private static function get_entity_combinations($entities, $max_n = 3) {
+        $results = [];
+        $n = count($entities);
+        for ($size = 2; $size <= $max_n; $size++) {
+            $indexes = range(0, $n - 1);
+            $combos = self::combinations($indexes, $size);
+            foreach ($combos as $combo) {
+                $perms = self::permutations($combo);
+                foreach ($perms as $perm) {
+                    $results[] = array_map(function($i) use ($entities) { return $entities[$i]; }, $perm);
+                }
+            }
+        }
+        return $results;
+    }
+    // Helper: All k-combinations of an array
+    private static function combinations($arr, $k) {
+        $result = [];
+        $n = count($arr);
+        if ($k == 0) return [[]];
+        for ($i = 0; $i <= $n - $k; $i++) {
+            $head = [$arr[$i]];
+            $tail = self::combinations(array_slice($arr, $i + 1), $k - 1);
+            foreach ($tail as $t) {
+                $result[] = array_merge($head, $t);
+            }
+        }
+        return $result;
+    }
+    // Helper: All permutations of an array
+    private static function permutations($arr) {
+        if (count($arr) <= 1) return [$arr];
+        $result = [];
+        foreach ($arr as $i => $v) {
+            $rest = $arr;
+            unset($rest[$i]);
+            foreach (self::permutations(array_values($rest)) as $p) {
+                array_unshift($p, $v);
+                $result[] = $p;
+            }
+        }
+        return $result;
+    }
+
+    // Add this new helper function to detect entity type
+    private function detect_entity_type($enriched_entity) {
+        // Try to infer type from URLs or names
+        if (!empty($enriched_entity['wikidata_url'])) {
+            $wikidata_id = basename($enriched_entity['wikidata_url']);
+            // Use Wikidata API to get type (instance of)
+            $api_url = 'https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=' . urlencode($wikidata_id) . '&property=P31&format=json';
+            $response = wp_remote_get($api_url, array('timeout' => 10));
+            if (!is_wp_error($response)) {
+                $body = wp_remote_retrieve_body($response);
+                $data = json_decode($body, true);
+                if (isset($data['claims']['P31'][0]['mainsnak']['datavalue']['value']['id'])) {
+                    $instance_id = $data['claims']['P31'][0]['mainsnak']['datavalue']['value']['id'];
+                    // Map some common Wikidata types
+                    $type_map = [
+                        'Q5' => 'person', // human
+                        'Q43229' => 'organization',
+                        'Q4830453' => 'business',
+                        'Q3918' => 'university',
+                        'Q95074' => 'company',
+                        'Q16521' => 'taxon',
+                        'Q571' => 'book',
+                        'Q11424' => 'film',
+                        'Q13442814' => 'scholarly article',
+                        'Q12737077' => 'course',
+                        // Add more as needed
+                    ];
+                    if (isset($type_map[$instance_id])) {
+                        return $type_map[$instance_id];
+                    }
+                }
+            }
+        }
+        // Fallback: guess from name
+        if (preg_match('/^[A-Z][a-z]+ [A-Z][a-z]+$/', $enriched_entity['name'])) {
+            return 'person';
+        }
+        if (stripos($enriched_entity['name'], 'university') !== false || stripos($enriched_entity['name'], 'school') !== false) {
+            return 'organization';
+        }
+        if (stripos($enriched_entity['name'], 'course') !== false) {
+            return 'course';
+        }
+        return null;
     }
 } 

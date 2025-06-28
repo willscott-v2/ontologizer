@@ -1,10 +1,14 @@
 # Ontologizer WordPress Plugin
 
-**Version: 1.1.0**
+**Version: 1.13.0**
 
 A powerful WordPress plugin that automatically extracts named entities and key topics from webpages, enriching them with structured identifiers from Wikipedia, Wikidata, Google's Knowledge Graph, and ProductOntology. Generate SEO-optimized JSON-LD structured data and receive content optimization recommendations.
 
 For a detailed list of changes, see the [CHANGELOG.md](CHANGELOG.md) file.
+
+## Author
+
+Will Scott
 
 ## Features
 
@@ -19,6 +23,11 @@ For a detailed list of changes, see the [CHANGELOG.md](CHANGELOG.md) file.
 - **Interactive Interface**: User-friendly frontend with tabbed results
 - **WordPress Integration**: Easy installation and shortcode usage
 - **Cache Management**: Clear cached results directly from the admin dashboard.
+- **New**: Users can now override the cache for a URL from the front-end form (force fresh analysis)
+- **Improved main topic extraction**: Now automatically detects course/program names from page titles (e.g., "AI Marketing Course")
+- **Improved contextual entity handling**: For Person topics, related entities like cuisine, city, organization, restaurant, place, location, and region are no longer flagged as off-topic.
+- **Improved salience tips for Person topics**: Now recommends strengthening connections to contextually relevant entities (cuisine, city, organization, restaurant, place, location, region, book, TV show) instead of removing them.
+- **Entities present in the title, headings, or more than once in the body are never flagged as irrelevant.**
 
 ## Installation
 
@@ -122,81 +131,19 @@ ontologizer/
 └── README.md                       # This file
 ```
 
-## Requirements
-
-- WordPress 5.0 or higher
-- PHP 7.4 or higher
-- cURL support enabled
-- JSON extension enabled
-
-## Browser Support
-
-- Chrome 60+
-- Firefox 55+
-- Safari 12+
-- Edge 79+
-
-## Troubleshooting
-
-### Common Issues
-
-1. **"Failed to fetch webpage content"**
-   - Check if the URL is accessible
-   - Ensure the website allows external requests
-   - Verify your server has cURL enabled
-
-2. **"No entities found"**
-   - Try a different webpage with more named entities
-   - Check if the content is properly structured
-   - Consider adding an OpenAI API key for better extraction
-
-3. **API errors**
-   - Verify your API keys are correct
-   - Check API usage limits
-   - Ensure proper permissions are set
-
-### Debug Mode
-
-Enable WordPress debug mode to see detailed error messages:
-
-```php
-// In wp-config.php
-define('WP_DEBUG', true);
-define('WP_DEBUG_LOG', true);
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## License
-
-This plugin is licensed under the GPL v2 or later.
-
-## Support
-
-For support and questions:
-- Create an issue on GitHub
-- Check the troubleshooting section above
-- Review WordPress error logs
+**Latest Features:**
+- Improved main topic and entity extraction logic (title, meta, headings prioritized)
+- OpenAI token usage and cost tracking, displayed in the UI
+- More accurate salience and entity relevance
+- Combined main topic logic: Detects and displays combined topics (e.g., 'Higher Education Digital Marketing') when appropriate
+- Improved combined entity detection: Finds the longest relevant phrase from top entities in title/meta/headings
+- Sub-entity inclusion: Ensures important sub-entities (e.g., 'Higher Education') are included if present in title/meta/headings
+- Always includes capitalized n-grams (e.g., 'Higher Education') from title/meta/headings/URL as entities
+- Markdown export now includes the page title as a heading
 
 ## Changelog
 
-For a detailed list of changes, please refer to the [CHANGELOG.md](CHANGELOG.md) file.
-
-### Version 1.1.0
-- Added cache management, improved topical entity extraction, and integrated the real Google Knowledge Graph API.
-- Added confidence scoring and enhanced the UI with progress indicators and stats.
-- Fixed admin page UI bugs.
-
-### Version 1.0.0
-- Initial release
-- Entity extraction and enrichment
-- JSON-LD generation
-- Content analysis and recommendations
-- WordPress admin interface
-- Frontend shortcode integration 
+- Improved entity identification and main topic extraction logic
+- Main topic now prefers exact phrase matches and boosts Person/Organization entities
+- Entities are enriched with type information (Person, Organization, etc.) for better topic selection
+- Recommendations now default to aligning/integrating related entities with the main topic, only suggesting removal for truly irrelevant content.

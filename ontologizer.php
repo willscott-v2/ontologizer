@@ -3,8 +3,8 @@
  * Plugin Name: Ontologizer
  * Plugin URI: https://github.com/your-username/ontologizer
  * Description: Automatically extract named entities from webpages and enrich them with structured identifiers from Wikipedia, Wikidata, Google's Knowledge Graph, and ProductOntology.
- * Version: 1.5.0
- * Author: Your Name
+ * Version: 1.13.0
+ * Author: Will Scott
  * License: GPL v2 or later
  * Text Domain: ontologizer
  */
@@ -15,7 +15,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('ONTOLOGIZER_VERSION', '1.5.0');
+define('ONTOLOGIZER_VERSION', '1.13.0');
 define('ONTOLOGIZER_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('ONTOLOGIZER_PLUGIN_PATH', plugin_dir_path(__FILE__));
 
@@ -35,6 +35,8 @@ class Ontologizer {
         add_action('admin_init', array($this, 'register_settings'));
         add_action('admin_enqueue_scripts', array($this, 'admin_enqueue_scripts'));
         add_shortcode('ontologizer', array($this, 'shortcode'));
+        add_action('wp_ajax_ontologizer_list_cache', array($this, 'list_cache_ajax'));
+        add_action('wp_ajax_ontologizer_delete_cache_entry', array($this, 'delete_cache_entry_ajax'));
         
         // Activation and deactivation hooks
         register_activation_hook(__FILE__, array($this, 'activate'));
@@ -227,16 +229,25 @@ class Ontologizer {
     
     public function process_url_ajax() {
         check_ajax_referer('ontologizer_nonce', 'nonce');
-        
-        $url = sanitize_url($_POST['url']);
-        
-        if (empty($url)) {
-            wp_send_json_error(__('Invalid URL provided', 'ontologizer'));
+        $url = isset($_POST['url']) ? sanitize_url($_POST['url']) : '';
+        $paste_content = isset($_POST['paste_content']) ? trim(stripslashes($_POST['paste_content'])) : '';
+        $main_topic_strategy = isset($_POST['main_topic_strategy']) ? sanitize_text_field($_POST['main_topic_strategy']) : 'strict';
+        $clear_cache = isset($_POST['clear_cache']) && $_POST['clear_cache'] == 1;
+        if (empty($url) && empty($paste_content)) {
+            wp_send_json_error(__('Please provide a URL or paste content.', 'ontologizer'));
         }
-        
         try {
             $processor = new OntologizerProcessor();
-            $result = $processor->process_url($url);
+            if (!empty($url) && $clear_cache) {
+                // Remove cache for this URL
+                $cache_key = 'ontologizer_' . md5($url);
+                delete_transient($cache_key);
+            }
+            if (!empty($paste_content)) {
+                $result = $processor->process_pasted_content($paste_content, $main_topic_strategy);
+            } else {
+                $result = $processor->process_url($url, $main_topic_strategy);
+            }
             wp_send_json_success($result);
         } catch (Exception $e) {
             wp_send_json_error($e->getMessage());
@@ -267,6 +278,42 @@ class Ontologizer {
         }
     
         wp_send_json_success(sprintf(_n('%d cached item has been cleared.', '%d cached items have been cleared.', $count, 'ontologizer'), $count));
+    }
+
+    public function list_cache_ajax() {
+        check_ajax_referer('ontologizer_admin_nonce', 'nonce');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(__('You do not have permission to perform this action.', 'ontologizer'));
+        }
+        global $wpdb;
+        $transient_prefix = '_transient_ontologizer_';
+        $sql = "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE %s";
+        $results = $wpdb->get_results($wpdb->prepare($sql, $wpdb->esc_like($transient_prefix) . '%'));
+        $processor = new OntologizerProcessor();
+        $cache_list = array();
+        foreach ($results as $row) {
+            $data = maybe_unserialize($row->option_value);
+            $summary = $processor->get_cache_summary($data);
+            $summary['cache_key'] = $row->option_name;
+            $cache_list[] = $summary;
+        }
+        wp_send_json_success($cache_list);
+    }
+
+    public function delete_cache_entry_ajax() {
+        check_ajax_referer('ontologizer_admin_nonce', 'nonce');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(__('You do not have permission to perform this action.', 'ontologizer'));
+        }
+        $cache_key = sanitize_text_field($_POST['cache_key']);
+        if (empty($cache_key)) {
+            wp_send_json_error('No cache key provided.');
+        }
+        global $wpdb;
+        $sql = "DELETE FROM {$wpdb->options} WHERE option_name = %s OR option_name = %s";
+        $timeout_key = str_replace('_transient_', '_transient_timeout_', $cache_key);
+        $wpdb->query($wpdb->prepare($sql, $cache_key, $timeout_key));
+        wp_send_json_success('Cache entry deleted.');
     }
 }
 

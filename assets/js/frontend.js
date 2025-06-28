@@ -3,17 +3,25 @@ jQuery(document).ready(function($) {
     // Form submission
     $('#ontologizer-form').on('submit', function(e) {
         e.preventDefault();
-        
-        const url = $('#ontologizer-url').val().trim();
-        if (!url) {
-            showError('Please enter a valid URL');
-            return;
-        }
-        
-        // Validate URL format
-        if (!isValidUrl(url)) {
-            showError('Please enter a valid URL format (e.g., https://example.com)');
-            return;
+        const inputMode = $('input[name="input_mode"]:checked').val();
+        let url = '';
+        let pasteContent = '';
+        if (inputMode === 'url') {
+            url = $('#ontologizer-url').val().trim();
+            if (!url) {
+                showError('Please enter a valid URL');
+                return;
+            }
+            if (!isValidUrl(url)) {
+                showError('Please enter a valid URL format (e.g., https://example.com)');
+                return;
+            }
+        } else {
+            pasteContent = $('#ontologizer-paste').val().trim();
+            if (!pasteContent) {
+                showError('Please paste some content to analyze.');
+                return;
+            }
         }
         
         // Show loading state
@@ -39,35 +47,43 @@ jQuery(document).ready(function($) {
             data: {
                 action: 'ontologizer_process_url',
                 url: url,
-                nonce: ontologizer_ajax.nonce
+                paste_content: pasteContent,
+                nonce: ontologizer_ajax.nonce,
+                main_topic_strategy: $('#main-topic-strategy').val(),
+                clear_cache: $('#ontologizer-clear-cache').is(':checked') ? 1 : 0
             },
             timeout: 170000, // 170 second timeout, just under the server's 180s limit
             success: function(response) {
                 if (response.success) {
                     displayResults(response.data);
                 } else {
-                    showError(response.data || 'An error occurred while processing the URL');
+                    showError(response.data || 'An error occurred while processing the request');
                 }
             },
             error: function(xhr, status, error) {
                 let errorMessage = 'Network error. Please try again.';
                 
                 if (status === 'timeout') {
-                    errorMessage = 'Request timed out. The URL might be too complex or the server is slow.';
+                    errorMessage = 'Request timed out. The content might be too complex or the server is slow.';
                 } else if (xhr.status === 403) {
-                    errorMessage = 'Access denied. The website might be blocking external requests.';
+                    errorMessage = 'Access denied.';
                 } else if (xhr.status === 404) {
-                    errorMessage = 'Page not found. Please check the URL and try again.';
+                    errorMessage = 'Not found.';
                 } else if (xhr.status === 500) {
                     errorMessage = 'Server error. Please try again later.';
                 }
                 
                 showError(errorMessage);
+                
+                // If in URL mode, offer paste fallback
+                if (inputMode === 'url') {
+                    showPasteFallback();
+                }
             },
             complete: function() {
                 // Reset button state
                 button.prop('disabled', false);
-                buttonText.text('Analyze URL');
+                buttonText.text('Analyze');
                 spinner.hide();
                 
                 // Hide progress indicator
@@ -173,8 +189,10 @@ jQuery(document).ready(function($) {
         // Display JSON-LD
         displayJsonLd(data.json_ld);
         
-        // Display recommendations
-        displayRecommendations(data.recommendations);
+        // New: get tips and irrelevantEntities from data if present
+        const tips = data.salience_tips || [];
+        const irrelevantEntities = data.irrelevant_entities || [];
+        displayRecommendations(data.recommendations, tips, irrelevantEntities);
         
         // Display processing stats and salience score
         displayStats(data);
@@ -194,6 +212,26 @@ jQuery(document).ready(function($) {
         $('html, body').animate({
             scrollTop: $('#ontologizer-results').offset().top - 50
         }, 500);
+        
+        // Store last data for download
+        window.lastOntologizerData = data;
+        const origDisplayResults = displayResults;
+        window.displayResults = function(data) {
+            window.lastOntologizerData = data;
+            origDisplayResults(data);
+            // Add Download as Markdown button only after results are shown
+            if ($('#ontologizer-download-md').length === 0) {
+                $('.results-header').append('<button id="ontologizer-download-md" class="copy-button" style="background:#007cba;margin-left:10px;">Download as Markdown</button>');
+            }
+            $('#ontologizer-download-md').prop('disabled', false);
+            // Add or update debug section
+            if ($('#ontologizer-md-debug').length === 0) {
+                $('.results-header').append('<pre id="ontologizer-md-debug" style="background:#f8f8f8;border:1px solid #ccc;padding:10px;margin-top:10px;max-width:100%;overflow-x:auto;font-size:12px;"></pre>');
+            }
+            $('#ontologizer-md-debug').text(JSON.stringify(data, null, 2));
+            // Debug log
+            console.log('Ontologizer Markdown Export Data:', data);
+        };
     }
     
     function displayEntities(entities) {
@@ -248,36 +286,38 @@ jQuery(document).ready(function($) {
         setTimeout(autoResizeTextarea, 100);
     }
     
-    function displayRecommendations(recommendations) {
+    function displayRecommendations(recommendations, tips = [], irrelevantEntities = []) {
         const container = $('#recommendations-list');
         container.empty();
-        
-        if (!recommendations || recommendations.length === 0) {
-            container.html('<p class="no-recommendations">No recommendations available.</p>');
-            return;
+        let html = '';
+        if (tips && tips.length > 0) {
+            html += '<div class="salience-tips"><strong>How to improve topical salience:</strong><ul>';
+            tips.forEach(function(tip) { html += '<li>' + tip + '</li>'; });
+            html += '</ul></div>';
         }
-        
-        const recommendationsHtml = recommendations.map(function(rec, index) {
-            let recommendationText = '';
-            if (typeof rec === 'object' && rec !== null && rec.advice) {
-                const category = rec.category ? `<strong class="rec-category">${rec.category}:</strong> ` : '';
-                recommendationText = `${category}${rec.advice}`;
-            } else {
-                // Fallback for older format or simple strings
-                recommendationText = rec;
-            }
-
-            return `<div class="recommendation-item">
-                <span class="recommendation-number">${index + 1}.</span>
-                <span class="recommendation-text">${recommendationText}</span>
-            </div>`;
-        }).join('');
-        
-        container.html(recommendationsHtml);
+        if (irrelevantEntities && irrelevantEntities.length > 0) {
+            html += '<div class="irrelevant-entities"><strong>Irrelevant entities/content to consider removing:</strong> ' + irrelevantEntities.join(', ') + '</div>';
+        }
+        if (!recommendations || recommendations.length === 0) {
+            html += '<p class="no-recommendations">No recommendations available.</p>';
+        } else {
+            const recommendationsHtml = recommendations.map(function(rec, index) {
+                let recommendationText = '';
+                if (typeof rec === 'object' && rec !== null && rec.advice) {
+                    const category = rec.category ? `<strong class="rec-category">${rec.category}:</strong> ` : '';
+                    recommendationText = `${category}${rec.advice}`;
+                } else {
+                    recommendationText = rec;
+                }
+                return `<div class="recommendation-item"><span class="recommendation-number">${index + 1}.</span><span class="recommendation-text">${recommendationText}</span></div>`;
+            }).join('');
+            html += recommendationsHtml;
+        }
+        container.html(html);
     }
     
     function displayStats(data) {
-        const statsHtml = `
+        let statsHtml = `
             <div class="processing-stats">
                 <div class="stat-item">
                     <span class="stat-label">Processing Time:</span>
@@ -291,27 +331,33 @@ jQuery(document).ready(function($) {
                     <span class="stat-label">Enriched Entities:</span>
                     <span class="stat-value">${data.enriched_count || 0}</span>
                 </div>
-            </div>
         `;
-        
-        // Add stats to results header
+        if (data.openai_token_usage) {
+            statsHtml += `
+                <div class="stat-item">
+                    <span class="stat-label">OpenAI Tokens:</span>
+                    <span class="stat-value">${data.openai_token_usage}</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">OpenAI Cost:</span>
+                    <span class="stat-value">$${data.openai_cost_usd}</span>
+                </div>
+            `;
+        }
+        statsHtml += '</div>';
         $('.results-header').append(statsHtml);
     }
     
     function displaySalienceScore(score, topic) {
         const container = $('#ontologizer-salience-score-container');
-        const rotation = ((score / 100) * 180) - 90; // Map score (0-100) to rotation (-90 to +90 degrees)
-        
+        // Shaded background based on score (green for high, yellow for medium, red for low)
+        let bgColor = '#e74c3c';
+        if (score >= 80) bgColor = '#27ae60';
+        else if (score >= 50) bgColor = '#f1c40f';
         const scoreHtml = `
-            <div class="ontologizer-salience-score">
-                <div class="salience-score-gauge">
-                    <div class="gauge-background"></div>
-                    <div class="gauge-arc" style="transform: rotate(${rotation}deg)"></div>
-                    <div class="gauge-mask"></div>
-                    <div class="gauge-center-dot"></div>
-                    <div class="gauge-value">${score}</div>
-                </div>
-                <div class="salience-primary-topic">
+            <div class="ontologizer-salience-score" style="background: linear-gradient(135deg, ${bgColor}22 0%, #fff 100%); border-radius: 1.5rem; padding: 1.5rem 0; text-align: center;">
+                <div class="salience-score-number" style="font-size: 3.5rem; font-weight: 800; color: ${bgColor}; line-height: 1;">${score}%</div>
+                <div class="salience-primary-topic" style="margin-top: 0.5rem;">
                     <span class="topic-label">Primary Topic:</span>
                     <span class="topic-name">${topic || 'Not identified'}</span>
                 </div>
@@ -388,5 +434,106 @@ jQuery(document).ready(function($) {
         } else {
             $(this).removeClass('invalid-url');
         }
+    });
+    
+    // Input mode toggle
+    $('input[name="input_mode"]').on('change', function() {
+        if ($(this).val() === 'url') {
+            $('#url-input-group').show();
+            $('#paste-input-group').hide();
+        } else {
+            $('#url-input-group').hide();
+            $('#paste-input-group').show();
+        }
+    });
+    
+    function showPasteFallback() {
+        $('input[name="input_mode"][value="paste"]').prop('checked', true).trigger('change');
+        $('#ontologizer-paste').focus();
+        showError('We couldn\'t fetch the page automatically. Please copy and paste the HTML or visible content of the page below to analyze it.');
+    }
+    
+    // Add Download as Markdown button
+    if ($('#ontologizer-download-md').length === 0) {
+        $('.results-header').append('<button id="ontologizer-download-md" class="copy-button" style="background:#007cba;margin-left:10px;">Download as Markdown</button>');
+    }
+    $(document).on('click', '#ontologizer-download-md', function() {
+        const data = window.lastOntologizerData || {};
+        if (!data || !data.entities || !data.json_ld) {
+            alert('No analysis data available. Please run an analysis first.');
+            return;
+        }
+        let md = '';
+        // Page title
+        if (data.page_title) {
+            md += `# ${data.page_title}\n`;
+        } else {
+            md += '# (No page title found)\n';
+        }
+        md += `\n## Ontologizer Analysis\n`;
+        if (data.url) md += `**URL:** ${data.url}\n`;
+        if (data.primary_topic) md += `**Primary Topic:** ${data.primary_topic}\n`;
+        if (typeof data.topical_salience !== 'undefined') md += `**Salience:** ${data.topical_salience}%\n`;
+        if (typeof data.processing_time !== 'undefined') md += `**Processing Time:** ${data.processing_time.toFixed(2)}s\n`;
+        if (typeof data.entities_count !== 'undefined') md += `**Entities Found:** ${data.entities_count}\n`;
+        if (typeof data.enriched_count !== 'undefined') md += `**Enriched Entities:** ${data.enriched_count}\n`;
+        md += '\n---\n';
+        // Entities
+        md += `\n## Entities\n`;
+        if (data.entities && data.entities.length > 0) {
+            md += '| Entity | Confidence | Wikipedia | Wikidata | Google KG | ProductOntology |\n';
+            md += '|--------|------------|-----------|----------|----------|-----------------|\n';
+            data.entities.forEach(function(entity) {
+                md += `| ${entity.name || '(missing)'} | ${entity.confidence_score || ''}% | ` +
+                    (entity.wikipedia_url ? `[Wikipedia](${entity.wikipedia_url})` : '') + ' | ' +
+                    (entity.wikidata_url ? `[Wikidata](${entity.wikidata_url})` : '') + ' | ' +
+                    (entity.google_kg_url ? `[Google KG](${entity.google_kg_url})` : '') + ' | ' +
+                    (entity.productontology_url ? `[ProductOntology](${entity.productontology_url})` : '') + ' |\n';
+            });
+        } else {
+            md += '_No entities found._\n';
+        }
+        // JSON-LD
+        md += `\n## JSON-LD\n`;
+        if (data.json_ld) {
+            md += '```json\n' + JSON.stringify(data.json_ld, null, 2) + '\n```\n';
+        } else {
+            md += '_No JSON-LD generated._\n';
+        }
+        // Recommendations
+        md += `\n## Recommendations\n`;
+        if (data.salience_tips && data.salience_tips.length > 0) {
+            md += '**How to improve topical salience:**\n';
+            data.salience_tips.forEach(function(tip) { md += '- ' + tip + '\n'; });
+        }
+        if (data.irrelevant_entities && data.irrelevant_entities.length > 0) {
+            md += '\n**Irrelevant entities/content to consider removing:** ' + data.irrelevant_entities.join(', ') + '\n';
+        }
+        if (data.recommendations && data.recommendations.length > 0) {
+            md += '\n';
+            data.recommendations.forEach(function(rec, i) {
+                if (typeof rec === 'object' && rec.advice) {
+                    md += `${i+1}. **${rec.category || ''}**: ${rec.advice}\n`;
+                } else {
+                    md += `${i+1}. ${rec}\n`;
+                }
+            });
+        } else {
+            md += '_No recommendations available._\n';
+        }
+        // Sanitize filename
+        let filename = 'ontologizer-analysis.md';
+        if (data.page_title) {
+            filename = data.page_title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') + '.md';
+        }
+        // Download
+        const blob = new Blob([md], {type: 'text/markdown'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function() { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
     });
 }); 
