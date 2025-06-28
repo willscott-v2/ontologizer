@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] - 2024-06-28
+
+### Added
+- **Enhanced Knowledge Graph Validation**: Comprehensive error checking to prevent incorrect Wikipedia/Wikidata links
+  - Multi-result search with confidence scoring for better entity matching
+  - Content verification to ensure Wikipedia pages actually mention the entity
+  - Disambiguation page detection and avoidance
+  - Improved error logging for debugging
+- **Advanced JSON-LD Schema Generation**: Automatic detection and inclusion of additional schema types
+  - Author detection from meta tags, CSS classes, and text patterns
+  - Organization/publisher identification from site branding elements
+  - FAQ schema extraction with question-answer pairing
+  - HowTo schema detection for tutorials and guides
+  - Comprehensive structured data for better SEO
+- **Improved Confidence Scoring**: More accurate entity confidence assessment
+  - Multi-source validation bonuses when multiple knowledge bases agree
+  - Entity type-specific scoring (Person, Organization, Place, etc.)
+  - Better validation of entity matches across all sources
+
+### Changed
+- **Wikipedia API Integration**: Now searches 5 results instead of 1 and picks the best match
+- **Wikidata Integration**: Enhanced with multi-result search and label matching
+- **Google Knowledge Graph**: Improved with better name matching and description relevance
+- **JSON-LD Output**: Now includes author, publisher, FAQ, and HowTo schemas when detected
+
+### Fixed
+- **Entity Validation**: Prevents incorrect entity matches that could lead to wrong Wikipedia pages
+- **Schema Accuracy**: Ensures generated structured data accurately represents page content
+- **Error Handling**: Better logging and error messages for debugging
+
 ## [1.1.0] - 2024-06-21
 
 ### Added

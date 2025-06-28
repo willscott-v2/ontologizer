@@ -1,9 +1,9 @@
 <?php
 /**
  * Plugin Name: Ontologizer
- * Plugin URI: https://github.com/your-username/ontologizer
+ * Plugin URI: https://github.com/willscott-v2/ontologizer
  * Description: Automatically extract named entities from webpages and enrich them with structured identifiers from Wikipedia, Wikidata, Google's Knowledge Graph, and ProductOntology.
- * Version: 1.13.0
+ * Version: 1.14.0
  * Author: Will Scott
  * License: GPL v2 or later
  * Text Domain: ontologizer
@@ -15,7 +15,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('ONTOLOGIZER_VERSION', '1.13.0');
+define('ONTOLOGIZER_VERSION', '1.14.0');
 define('ONTOLOGIZER_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('ONTOLOGIZER_PLUGIN_PATH', plugin_dir_path(__FILE__));
 

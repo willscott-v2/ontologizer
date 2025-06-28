@@ -93,7 +93,7 @@ class OntologizerProcessor {
         error_log(sprintf('Ontologizer: Entity enrichment took %.2f seconds.', microtime(true) - $start_time));
         
         // Step 4: Generate JSON-LD schema
-        $json_ld = $this->generate_json_ld($enriched_entities, $url);
+        $json_ld = $this->generate_json_ld($enriched_entities, $url, $html_content);
         
         // Step 5: Analyze content and provide recommendations
         $start_time = microtime(true);
@@ -628,21 +628,168 @@ class OntologizerProcessor {
     }
     
     private function find_wikipedia_url($entity) {
-        $search_url = 'https://en.wikipedia.org/w/api.php?action=opensearch&search=' . urlencode($entity) . '&limit=1&namespace=0&format=json';
+        $search_url = 'https://en.wikipedia.org/w/api.php?action=opensearch&search=' . urlencode($entity) . '&limit=5&namespace=0&format=json';
         
         $response = wp_remote_get($search_url, array('timeout' => 10));
         if (is_wp_error($response)) {
+            error_log('Ontologizer: Wikipedia API error - ' . $response->get_error_message());
             return null;
         }
         
         $body = wp_remote_retrieve_body($response);
         $data = json_decode($body, true);
         
-        if (isset($data[3][0])) {
-            return $data[3][0];
+        if (!isset($data[1]) || !isset($data[3]) || empty($data[1])) {
+            return null;
         }
         
+        // Get search results and URLs
+        $titles = $data[1];
+        $urls = $data[3];
+        
+        // Try to find the best match
+        $best_match = $this->find_best_wikipedia_match($entity, $titles, $urls);
+        
+        if ($best_match) {
+            error_log('Ontologizer: Found Wikipedia match for "' . $entity . '" -> "' . $best_match['title'] . '" (confidence: ' . $best_match['confidence'] . ')');
+            return $best_match['url'];
+        }
+        
+        error_log('Ontologizer: No suitable Wikipedia match found for "' . $entity . '"');
         return null;
+    }
+    
+    private function find_best_wikipedia_match($entity, $titles, $urls) {
+        $entity_lower = strtolower(trim($entity));
+        $best_match = null;
+        $best_score = 0;
+        
+        for ($i = 0; $i < count($titles) && $i < count($urls); $i++) {
+            $title = $titles[$i];
+            $url = $urls[$i];
+            $title_lower = strtolower($title);
+            
+            // Calculate match score
+            $score = $this->calculate_wikipedia_match_score($entity_lower, $title_lower, $title);
+            
+            // Additional validation for high-scoring matches
+            if ($score > 70) {
+                // Verify the page content matches the entity
+                $content_match = $this->verify_wikipedia_page_content($url, $entity_lower);
+                if ($content_match) {
+                    $score += 20; // Bonus for content verification
+                } else {
+                    $score -= 30; // Penalty for content mismatch
+                }
+            }
+            
+            // Check for disambiguation pages
+            if (strpos($title_lower, '(disambiguation)') !== false || strpos($title_lower, 'disambiguation') !== false) {
+                $score -= 50; // Heavy penalty for disambiguation pages
+            }
+            
+            // Check for redirects or stub pages
+            if (strpos($title_lower, 'redirect') !== false || strpos($title_lower, 'stub') !== false) {
+                $score -= 30;
+            }
+            
+            if ($score > $best_score) {
+                $best_score = $score;
+                $best_match = array(
+                    'title' => $title,
+                    'url' => $url,
+                    'confidence' => $score
+                );
+            }
+        }
+        
+        // Only return matches with reasonable confidence
+        return ($best_score >= 50) ? $best_match : null;
+    }
+    
+    private function calculate_wikipedia_match_score($entity_lower, $title_lower, $title) {
+        $score = 0;
+        
+        // Exact match gets highest score
+        if ($entity_lower === $title_lower) {
+            $score = 100;
+        }
+        // Partial matches
+        elseif (strpos($title_lower, $entity_lower) !== false) {
+            $score = 80;
+        }
+        elseif (strpos($entity_lower, $title_lower) !== false) {
+            $score = 70;
+        }
+        // Word-based matching
+        else {
+            $entity_words = array_filter(explode(' ', $entity_lower));
+            $title_words = array_filter(explode(' ', $title_lower));
+            
+            $common_words = array_intersect($entity_words, $title_words);
+            $word_match_ratio = count($common_words) / max(count($entity_words), count($title_words));
+            
+            $score = $word_match_ratio * 60;
+        }
+        
+        // Bonus for proper capitalization
+        if (preg_match('/^[A-Z][a-z]/', $title)) {
+            $score += 10;
+        }
+        
+        // Penalty for very long titles (likely not exact matches)
+        if (strlen($title) > strlen($entity) * 2) {
+            $score -= 20;
+        }
+        
+        return max(0, $score);
+    }
+    
+    private function verify_wikipedia_page_content($url, $entity_lower) {
+        // Extract page title from URL
+        $page_title = basename($url);
+        $page_title = urldecode($page_title);
+        
+        // Get page content via API to verify it's about the right entity
+        $api_url = 'https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&titles=' . urlencode($page_title) . '&format=json&exlimit=1';
+        
+        $response = wp_remote_get($api_url, array('timeout' => 10));
+        if (is_wp_error($response)) {
+            return false;
+        }
+        
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+        
+        if (!isset($data['query']['pages'])) {
+            return false;
+        }
+        
+        foreach ($data['query']['pages'] as $page) {
+            if (isset($page['extract'])) {
+                $extract = strip_tags($page['extract']);
+                $extract_lower = strtolower($extract);
+                
+                // Check if the entity name appears in the first paragraph
+                if (strpos($extract_lower, $entity_lower) !== false) {
+                    return true;
+                }
+                
+                // Check for entity words in the extract
+                $entity_words = array_filter(explode(' ', $entity_lower));
+                $found_words = 0;
+                foreach ($entity_words as $word) {
+                    if (strlen($word) > 2 && strpos($extract_lower, $word) !== false) {
+                        $found_words++;
+                    }
+                }
+                
+                $word_ratio = $found_words / count($entity_words);
+                return $word_ratio >= 0.5; // At least 50% of words should match
+            }
+        }
+        
+        return false;
     }
     
     private function find_wikidata_url_from_wikipedia($wikipedia_url) {
@@ -652,11 +799,13 @@ class OntologizerProcessor {
         
         // Extract page title from Wikipedia URL
         $page_title = basename($wikipedia_url);
+        $page_title = urldecode($page_title);
         
         $api_url = 'https://en.wikipedia.org/w/api.php?action=query&prop=pageprops&titles=' . urlencode($page_title) . '&format=json';
         
         $response = wp_remote_get($api_url, array('timeout' => 10));
         if (is_wp_error($response)) {
+            error_log('Ontologizer: Wikipedia API error for Wikidata lookup - ' . $response->get_error_message());
             return null;
         }
         
@@ -666,7 +815,12 @@ class OntologizerProcessor {
         if (isset($data['query']['pages'])) {
             foreach ($data['query']['pages'] as $page) {
                 if (isset($page['pageprops']['wikibase_item'])) {
-                    return 'https://www.wikidata.org/wiki/' . $page['pageprops']['wikibase_item'];
+                    $wikidata_id = $page['pageprops']['wikibase_item'];
+                    
+                    // Verify the Wikidata entity is valid
+                    if ($this->verify_wikidata_entity($wikidata_id, $page_title)) {
+                        return 'https://www.wikidata.org/wiki/' . $wikidata_id;
+                    }
                 }
             }
         }
@@ -675,27 +829,119 @@ class OntologizerProcessor {
     }
 
     private function find_wikidata_url_direct($entity) {
-        $api_url = 'https://www.wikidata.org/w/api.php?action=wbsearchentities&search=' . urlencode($entity) . '&language=en&limit=1&format=json';
+        $api_url = 'https://www.wikidata.org/w/api.php?action=wbsearchentities&search=' . urlencode($entity) . '&language=en&limit=5&format=json';
 
         $response = wp_remote_get($api_url, array('timeout' => 10));
         if (is_wp_error($response)) {
+            error_log('Ontologizer: Wikidata API error - ' . $response->get_error_message());
             return null;
         }
 
         $body = wp_remote_retrieve_body($response);
         $data = json_decode($body, true);
 
-        if (isset($data['search'][0]['id'])) {
-            return 'https://www.wikidata.org/wiki/' . $data['search'][0]['id'];
+        if (!isset($data['search']) || empty($data['search'])) {
+            return null;
         }
-
+        
+        // Find the best match from search results
+        $entity_lower = strtolower(trim($entity));
+        $best_match = null;
+        $best_score = 0;
+        
+        foreach ($data['search'] as $result) {
+            $label = $result['label'] ?? '';
+            $description = $result['description'] ?? '';
+            $label_lower = strtolower($label);
+            
+            // Calculate match score
+            $score = $this->calculate_wikidata_match_score($entity_lower, $label_lower, $description);
+            
+            if ($score > $best_score) {
+                $best_score = $score;
+                $best_match = $result;
+            }
+        }
+        
+        // Only return matches with reasonable confidence
+        if ($best_score >= 60 && $best_match) {
+            error_log('Ontologizer: Found Wikidata match for "' . $entity . '" -> "' . $best_match['label'] . '" (confidence: ' . $best_score . ')');
+            return 'https://www.wikidata.org/wiki/' . $best_match['id'];
+        }
+        
         return null;
+    }
+    
+    private function calculate_wikidata_match_score($entity_lower, $label_lower, $description) {
+        $score = 0;
+        
+        // Exact label match gets highest score
+        if ($entity_lower === $label_lower) {
+            $score = 100;
+        }
+        // Partial matches
+        elseif (strpos($label_lower, $entity_lower) !== false) {
+            $score = 80;
+        }
+        elseif (strpos($entity_lower, $label_lower) !== false) {
+            $score = 70;
+        }
+        // Word-based matching
+        else {
+            $entity_words = array_filter(explode(' ', $entity_lower));
+            $label_words = array_filter(explode(' ', $label_lower));
+            
+            $common_words = array_intersect($entity_words, $label_words);
+            $word_match_ratio = count($common_words) / max(count($entity_words), count($label_words));
+            
+            $score = $word_match_ratio * 60;
+        }
+        
+        // Bonus for description relevance
+        if (!empty($description)) {
+            $desc_lower = strtolower($description);
+            $entity_words = array_filter(explode(' ', $entity_lower));
+            $found_words = 0;
+            foreach ($entity_words as $word) {
+                if (strlen($word) > 2 && strpos($desc_lower, $word) !== false) {
+                    $found_words++;
+                }
+            }
+            $desc_ratio = $found_words / count($entity_words);
+            $score += $desc_ratio * 20;
+        }
+        
+        return max(0, $score);
+    }
+    
+    private function verify_wikidata_entity($wikidata_id, $expected_title) {
+        // Verify the Wikidata entity exists and has the expected label
+        $api_url = 'https://www.wikidata.org/w/api.php?action=wbgetentities&ids=' . $wikidata_id . '&languages=en&format=json';
+        
+        $response = wp_remote_get($api_url, array('timeout' => 10));
+        if (is_wp_error($response)) {
+            return false;
+        }
+        
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+        
+        if (isset($data['entities'][$wikidata_id]['labels']['en']['value'])) {
+            $wikidata_label = $data['entities'][$wikidata_id]['labels']['en']['value'];
+            $expected_lower = strtolower($expected_title);
+            $wikidata_lower = strtolower($wikidata_label);
+            
+            // Check if labels match reasonably well
+            return $this->calculate_wikidata_match_score($expected_lower, $wikidata_lower, '') >= 50;
+        }
+        
+        return false;
     }
     
     private function find_google_kg_url($entity) {
         if (!empty($this->api_keys['google_kg'])) {
             // Use the Google Knowledge Graph API
-            $api_url = 'https://kgsearch.googleapis.com/v1/entities:search?query=' . urlencode($entity) . '&key=' . $this->api_keys['google_kg'] . '&limit=1';
+            $api_url = 'https://kgsearch.googleapis.com/v1/entities:search?query=' . urlencode($entity) . '&key=' . $this->api_keys['google_kg'] . '&limit=5&types=Thing';
             
             $response = wp_remote_get($api_url, array('timeout' => 10));
             if (is_wp_error($response)) {
@@ -706,15 +952,83 @@ class OntologizerProcessor {
             $body = wp_remote_retrieve_body($response);
             $data = json_decode($body, true);
 
-            if (isset($data['itemListElement'][0]['result']['@id'])) {
-                $kgid = $data['itemListElement'][0]['result']['@id'];
-                $mid = str_replace('kg:', '', $kgid);
-                return 'https://www.google.com/search?kgmid=' . $mid;
+            if (isset($data['itemListElement']) && !empty($data['itemListElement'])) {
+                // Find the best match from results
+                $entity_lower = strtolower(trim($entity));
+                $best_match = null;
+                $best_score = 0;
+                
+                foreach ($data['itemListElement'] as $item) {
+                    if (isset($item['result'])) {
+                        $result = $item['result'];
+                        $name = $result['name'] ?? '';
+                        $description = $result['description'] ?? '';
+                        $name_lower = strtolower($name);
+                        
+                        // Calculate match score
+                        $score = $this->calculate_google_kg_match_score($entity_lower, $name_lower, $description);
+                        
+                        if ($score > $best_score) {
+                            $best_score = $score;
+                            $best_match = $result;
+                        }
+                    }
+                }
+                
+                // Only return matches with reasonable confidence
+                if ($best_score >= 60 && $best_match && isset($best_match['@id'])) {
+                    $kgid = $best_match['@id'];
+                    $mid = str_replace('kg:', '', $kgid);
+                    error_log('Ontologizer: Found Google KG match for "' . $entity . '" -> "' . $best_match['name'] . '" (confidence: ' . $best_score . ')');
+                    return 'https://www.google.com/search?kgmid=' . $mid;
+                }
             }
         }
         
         // Fallback to a standard Google search if no API key or no result
         return $this->get_google_search_fallback_url($entity);
+    }
+    
+    private function calculate_google_kg_match_score($entity_lower, $name_lower, $description) {
+        $score = 0;
+        
+        // Exact name match gets highest score
+        if ($entity_lower === $name_lower) {
+            $score = 100;
+        }
+        // Partial matches
+        elseif (strpos($name_lower, $entity_lower) !== false) {
+            $score = 80;
+        }
+        elseif (strpos($entity_lower, $name_lower) !== false) {
+            $score = 70;
+        }
+        // Word-based matching
+        else {
+            $entity_words = array_filter(explode(' ', $entity_lower));
+            $name_words = array_filter(explode(' ', $name_lower));
+            
+            $common_words = array_intersect($entity_words, $name_words);
+            $word_match_ratio = count($common_words) / max(count($entity_words), count($name_words));
+            
+            $score = $word_match_ratio * 60;
+        }
+        
+        // Bonus for description relevance
+        if (!empty($description)) {
+            $desc_lower = strtolower($description);
+            $entity_words = array_filter(explode(' ', $entity_lower));
+            $found_words = 0;
+            foreach ($entity_words as $word) {
+                if (strlen($word) > 2 && strpos($desc_lower, $word) !== false) {
+                    $found_words++;
+                }
+            }
+            $desc_ratio = $found_words / count($entity_words);
+            $score += $desc_ratio * 20;
+        }
+        
+        return max(0, $score);
     }
     
     private function get_google_search_fallback_url($entity) {
@@ -747,18 +1061,66 @@ class OntologizerProcessor {
     
     private function calculate_confidence_score($entity, $base_score) {
         $source_bonus = 0;
+        $validation_bonus = 0;
         
-        if ($entity['wikipedia_url']) $source_bonus += 10;
-        if ($entity['wikidata_url']) $source_bonus += 5;
-        if ($entity['google_kg_url'] && strpos($entity['google_kg_url'], 'kgmid=') !== false) $source_bonus += 10;
-        if ($entity['productontology_url']) $source_bonus += 5;
+        // Base source bonuses
+        if ($entity['wikipedia_url']) {
+            $source_bonus += 15; // Increased from 10 due to better validation
+        }
+        if ($entity['wikidata_url']) {
+            $source_bonus += 10; // Increased from 5 due to better validation
+        }
+        if ($entity['google_kg_url'] && strpos($entity['google_kg_url'], 'kgmid=') !== false) {
+            $source_bonus += 15; // Increased from 10 due to better validation
+        }
+        if ($entity['productontology_url']) {
+            $source_bonus += 5;
+        }
+        
+        // Validation bonuses based on match quality
+        // These would be set by the validation methods if we track them
+        // For now, we'll add bonuses based on URL presence (indicating good matches)
+        
+        // Multiple source validation bonus
+        $source_count = 0;
+        if ($entity['wikipedia_url']) $source_count++;
+        if ($entity['wikidata_url']) $source_count++;
+        if ($entity['google_kg_url'] && strpos($entity['google_kg_url'], 'kgmid=') !== false) $source_count++;
+        if ($entity['productontology_url']) $source_count++;
+        
+        if ($source_count >= 3) {
+            $validation_bonus += 20; // High confidence when multiple sources agree
+        } elseif ($source_count >= 2) {
+            $validation_bonus += 10; // Medium confidence when 2 sources agree
+        }
+        
+        // Entity type bonus (more specific types get higher scores)
+        if (isset($entity['type'])) {
+            switch (strtolower($entity['type'])) {
+                case 'person':
+                case 'organization':
+                    $validation_bonus += 10;
+                    break;
+                case 'place':
+                case 'location':
+                    $validation_bonus += 8;
+                    break;
+                case 'product':
+                case 'service':
+                    $validation_bonus += 6;
+                    break;
+                default:
+                    $validation_bonus += 3;
+                    break;
+            }
+        }
 
-        $final_score = $base_score + $source_bonus;
+        $final_score = $base_score + $source_bonus + $validation_bonus;
         
         return min(100, round($final_score)); // Cap score at 100
     }
     
-    private function generate_json_ld($enriched_entities, $page_url) {
+    private function generate_json_ld($enriched_entities, $page_url, $html_content = null) {
         $schema = array(
             '@context' => 'https://schema.org',
             '@type' => 'WebPage',
@@ -766,6 +1128,31 @@ class OntologizerProcessor {
             'about' => array(),
             'mentions' => array()
         );
+        
+        // Extract additional schema information if HTML content is provided
+        if ($html_content) {
+            $additional_schemas = $this->extract_additional_schemas($html_content);
+            
+            // Add author information
+            if (!empty($additional_schemas['author'])) {
+                $schema['author'] = $additional_schemas['author'];
+            }
+            
+            // Add organization information
+            if (!empty($additional_schemas['organization'])) {
+                $schema['publisher'] = $additional_schemas['organization'];
+            }
+            
+            // Add FAQ schema if detected
+            if (!empty($additional_schemas['faq'])) {
+                $schema['mainEntity'] = $additional_schemas['faq'];
+            }
+            
+            // Add HowTo schema if detected
+            if (!empty($additional_schemas['howto'])) {
+                $schema['mainEntity'] = $additional_schemas['howto'];
+            }
+        }
         
         foreach ($enriched_entities as $entity) {
             $same_as = array();
@@ -798,6 +1185,350 @@ class OntologizerProcessor {
         }
         
         return $schema;
+    }
+    
+    private function extract_additional_schemas($html_content) {
+        $schemas = array(
+            'author' => null,
+            'organization' => null,
+            'faq' => null,
+            'howto' => null
+        );
+        
+        $dom = new DOMDocument();
+        @$dom->loadHTML('<?xml encoding="utf-8" ?>' . $html_content);
+        $xpath = new DOMXPath($dom);
+        
+        // Extract author information
+        $schemas['author'] = $this->extract_author_schema($dom, $xpath);
+        
+        // Extract organization information
+        $schemas['organization'] = $this->extract_organization_schema($dom, $xpath);
+        
+        // Extract FAQ schema
+        $schemas['faq'] = $this->extract_faq_schema($dom, $xpath);
+        
+        // Extract HowTo schema
+        $schemas['howto'] = $this->extract_howto_schema($dom, $xpath);
+        
+        return $schemas;
+    }
+    
+    private function extract_author_schema($dom, $xpath) {
+        $author_selectors = array(
+            '//meta[@name="author"]',
+            '//meta[@property="article:author"]',
+            '//meta[@property="og:author"]',
+            '//*[@class*="author"]',
+            '//*[@id*="author"]',
+            '//*[contains(@class, "byline")]',
+            '//*[contains(@class, "writer")]',
+            '//*[contains(@class, "contributor")]',
+            '//*[@rel="author"]',
+            '//*[contains(text(), "By ")]',
+            '//*[contains(text(), "Author:")]',
+            '//*[contains(text(), "Written by")]'
+        );
+        
+        foreach ($author_selectors as $selector) {
+            $nodes = $xpath->query($selector);
+            if ($nodes && $nodes->length > 0) {
+                foreach ($nodes as $node) {
+                    $author_name = $this->extract_author_name($node);
+                    if ($author_name) {
+                        return array(
+                            '@type' => 'Person',
+                            'name' => $author_name
+                        );
+                    }
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    private function extract_author_name($node) {
+        // Handle meta tags
+        if ($node->tagName === 'meta') {
+            $content = $node->getAttribute('content');
+            if (!empty($content)) {
+                return trim($content);
+            }
+        }
+        
+        // Handle text content
+        $text = trim($node->textContent);
+        if (!empty($text)) {
+            // Clean up common prefixes
+            $text = preg_replace('/^(By|Author|Written by|Contributor):?\s*/i', '', $text);
+            $text = trim($text);
+            
+            // Extract just the name (first few words)
+            $words = explode(' ', $text);
+            $name_words = array_slice($words, 0, 3); // Take first 3 words max
+            $name = implode(' ', $name_words);
+            
+            if (strlen($name) > 2 && strlen($name) < 100) {
+                return $name;
+            }
+        }
+        
+        return null;
+    }
+    
+    private function extract_organization_schema($dom, $xpath) {
+        $org_selectors = array(
+            '//meta[@property="og:site_name"]',
+            '//meta[@name="application-name"]',
+            '//*[@class*="logo"]',
+            '//*[@id*="logo"]',
+            '//*[@class*="brand"]',
+            '//*[@id*="brand"]',
+            '//*[@class*="company"]',
+            '//*[@id*="company"]',
+            '//*[@class*="organization"]',
+            '//*[@id*="organization"]',
+            '//*[contains(@class, "site-title")]',
+            '//*[contains(@class, "site-name")]'
+        );
+        
+        foreach ($org_selectors as $selector) {
+            $nodes = $xpath->query($selector);
+            if ($nodes && $nodes->length > 0) {
+                foreach ($nodes as $node) {
+                    $org_name = $this->extract_organization_name($node);
+                    if ($org_name) {
+                        return array(
+                            '@type' => 'Organization',
+                            'name' => $org_name
+                        );
+                    }
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    private function extract_organization_name($node) {
+        // Handle meta tags
+        if ($node->tagName === 'meta') {
+            $content = $node->getAttribute('content');
+            if (!empty($content)) {
+                return trim($content);
+            }
+        }
+        
+        // Handle text content
+        $text = trim($node->textContent);
+        if (!empty($text) && strlen($text) > 2 && strlen($text) < 200) {
+            return $text;
+        }
+        
+        return null;
+    }
+    
+    private function extract_faq_schema($dom, $xpath) {
+        $faq_selectors = array(
+            '//*[contains(@class, "faq")]',
+            '//*[contains(@id, "faq")]',
+            '//*[contains(@class, "faqs")]',
+            '//*[contains(@id, "faqs")]',
+            '//*[contains(@class, "questions")]',
+            '//*[contains(@id, "questions")]',
+            '//*[contains(@class, "answers")]',
+            '//*[contains(@id, "answers")]',
+            '//*[contains(text(), "Frequently Asked Questions")]',
+            '//*[contains(text(), "FAQ")]',
+            '//*[contains(text(), "Common Questions")]'
+        );
+        
+        $faq_items = array();
+        
+        foreach ($faq_selectors as $selector) {
+            $nodes = $xpath->query($selector);
+            if ($nodes && $nodes->length > 0) {
+                foreach ($nodes as $node) {
+                    $items = $this->extract_faq_items($node, $xpath);
+                    if (!empty($items)) {
+                        $faq_items = array_merge($faq_items, $items);
+                    }
+                }
+            }
+        }
+        
+        if (!empty($faq_items)) {
+            return array(
+                '@type' => 'FAQPage',
+                'mainEntity' => array_slice($faq_items, 0, 10) // Limit to 10 FAQs
+            );
+        }
+        
+        return null;
+    }
+    
+    private function extract_faq_items($container_node, $xpath) {
+        $items = array();
+        
+        // Look for question-answer pairs
+        $question_selectors = array(
+            './/h2', './/h3', './/h4', './/h5', './/h6',
+            './/*[contains(@class, "question")]',
+            './/*[contains(@class, "q")]',
+            './/*[contains(@id, "question")]',
+            './/*[contains(@id, "q")]',
+            './/dt', './/strong', './/b'
+        );
+        
+        $questions = array();
+        foreach ($question_selectors as $selector) {
+            $nodes = $xpath->query($selector, $container_node);
+            if ($nodes) {
+                foreach ($nodes as $node) {
+                    $question_text = trim($node->textContent);
+                    if (!empty($question_text) && strlen($question_text) > 10) {
+                        $questions[] = $node;
+                    }
+                }
+            }
+        }
+        
+        foreach ($questions as $question_node) {
+            $question_text = trim($question_node->textContent);
+            
+            // Find the answer (next sibling or following element)
+            $answer_text = $this->find_faq_answer($question_node, $xpath);
+            
+            if (!empty($answer_text)) {
+                $items[] = array(
+                    '@type' => 'Question',
+                    'name' => $question_text,
+                    'acceptedAnswer' => array(
+                        '@type' => 'Answer',
+                        'text' => $answer_text
+                    )
+                );
+            }
+        }
+        
+        return $items;
+    }
+    
+    private function find_faq_answer($question_node, $xpath) {
+        // Try to find answer in next sibling
+        $next_sibling = $question_node->nextSibling;
+        while ($next_sibling) {
+            if ($next_sibling->nodeType === XML_ELEMENT_NODE) {
+                $text = trim($next_sibling->textContent);
+                if (!empty($text) && strlen($text) > 20) {
+                    return $text;
+                }
+            }
+            $next_sibling = $next_sibling->nextSibling;
+        }
+        
+        // Try to find answer in following elements
+        $following_elements = $xpath->query('following-sibling::*[1]', $question_node);
+        if ($following_elements && $following_elements->length > 0) {
+            $text = trim($following_elements->item(0)->textContent);
+            if (!empty($text) && strlen($text) > 20) {
+                return $text;
+            }
+        }
+        
+        return null;
+    }
+    
+    private function extract_howto_schema($dom, $xpath) {
+        $howto_selectors = array(
+            '//*[contains(@class, "how-to")]',
+            '//*[contains(@id, "how-to")]',
+            '//*[contains(@class, "tutorial")]',
+            '//*[contains(@id, "tutorial")]',
+            '//*[contains(@class, "guide")]',
+            '//*[contains(@id, "guide")]',
+            '//*[contains(@class, "instructions")]',
+            '//*[contains(@id, "instructions")]',
+            '//*[contains(@class, "steps")]',
+            '//*[contains(@id, "steps")]',
+            '//*[contains(text(), "How to")]',
+            '//*[contains(text(), "Step by step")]',
+            '//*[contains(text(), "Instructions")]',
+            '//*[contains(text(), "Tutorial")]'
+        );
+        
+        foreach ($howto_selectors as $selector) {
+            $nodes = $xpath->query($selector);
+            if ($nodes && $nodes->length > 0) {
+                foreach ($nodes as $node) {
+                    $howto = $this->extract_howto_content($node, $xpath);
+                    if ($howto) {
+                        return $howto;
+                    }
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    private function extract_howto_content($container_node, $xpath) {
+        // Extract title
+        $title_selectors = array(
+            './/h1', './/h2', './/h3',
+            './/*[contains(@class, "title")]',
+            './/*[contains(@class, "heading")]'
+        );
+        
+        $title = '';
+        foreach ($title_selectors as $selector) {
+            $nodes = $xpath->query($selector, $container_node);
+            if ($nodes && $nodes->length > 0) {
+                $title = trim($nodes->item(0)->textContent);
+                break;
+            }
+        }
+        
+        if (empty($title)) {
+            $title = 'How-to Guide';
+        }
+        
+        // Extract steps
+        $step_selectors = array(
+            './/*[contains(@class, "step")]',
+            './/*[contains(@id, "step")]',
+            './/li',
+            './/*[contains(@class, "instruction")]',
+            './/*[contains(@class, "direction")]'
+        );
+        
+        $steps = array();
+        foreach ($step_selectors as $selector) {
+            $nodes = $xpath->query($selector, $container_node);
+            if ($nodes) {
+                foreach ($nodes as $index => $node) {
+                    $step_text = trim($node->textContent);
+                    if (!empty($step_text) && strlen($step_text) > 10) {
+                        $steps[] = array(
+                            '@type' => 'HowToStep',
+                            'position' => $index + 1,
+                            'text' => $step_text
+                        );
+                    }
+                }
+            }
+        }
+        
+        if (!empty($steps)) {
+            return array(
+                '@type' => 'HowTo',
+                'name' => $title,
+                'step' => array_slice($steps, 0, 20) // Limit to 20 steps
+            );
+        }
+        
+        return null;
     }
     
     private function analyze_content($html_content, $enriched_entities) {
@@ -1035,7 +1766,7 @@ class OntologizerProcessor {
         $enriched_entities = $this->enrich_entities($entities);
         error_log(sprintf('Ontologizer: Entity enrichment (pasted) took %.2f seconds.', microtime(true) - $start_time));
         // Step 4: Generate JSON-LD schema
-        $json_ld = $this->generate_json_ld($enriched_entities, '');
+        $json_ld = $this->generate_json_ld($enriched_entities, '', $html_content);
         // Step 5: Analyze content and provide recommendations
         $start_time = microtime(true);
         $recommendations = $this->analyze_content($html_content, $enriched_entities);

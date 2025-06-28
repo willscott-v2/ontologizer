@@ -7,9 +7,11 @@
 - [ ] Implement batch processing for multiple URLs
 - [ ] Create Gutenberg block for easier embedding
 - [ ] Add export options (JSON-LD, RDF, CSV)
-- [ ] **Add rate limiting and API quota management** - Currently basic delay, need better handling
-- [ ] **Improve error handling in processor class** - Add try/catch blocks and user-friendly messages
-- [ ] **Add entity confidence scores** - Show how confident the system is about each entity
+- [x] **Add rate limiting and API quota management** - Currently basic delay, need better handling
+- [x] **Improve error handling in processor class** - Add try/catch blocks and user-friendly messages
+- [x] **Add entity confidence scores** - Show how confident the system is about each entity
+- [x] **Add comprehensive knowledge graph validation** - Prevent incorrect Wikipedia/Wikidata links
+- [x] **Enhanced JSON-LD schema generation** - Automatically detect and include author, organization, FAQ, and HowTo schemas
 
 ### Medium Priority
 - [ ] Improve admin UI with better error handling
@@ -101,4 +103,8 @@
 - [x] Admin interface
 - [x] AJAX processing
 - [x] Settings management
-- [x] Cache management interface 
+- [x] Cache management interface
+- [x] **Comprehensive knowledge graph validation** - Prevents incorrect entity matches
+- [x] **Enhanced confidence scoring** - More accurate entity confidence assessment
+- [x] **Multi-source entity verification** - Validates entities across multiple knowledge bases
+- [x] **Advanced JSON-LD schema generation** - Automatically detects author, organization, FAQ, and HowTo content 
