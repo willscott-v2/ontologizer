@@ -50,13 +50,14 @@ class OntologizerProcessor {
     public function __construct() {
         $this->api_keys = array(
             'openai' => get_option('ontologizer_openai_key', ''),
-            'google_kg' => get_option('ontologizer_google_kg_key', '')
+            'google_kg' => get_option('ontologizer_google_kg_key', ''),
+            'gemini' => get_option('ontologizer_gemini_key', '')
         );
         $this->cache_duration = get_option('ontologizer_cache_duration', 3600);
         $this->rate_limit_delay = 0.5; // 500ms delay between API calls
     }
     
-    public function process_url($url, $main_topic_strategy = 'strict') {
+    public function process_url($url, $main_topic_strategy = 'strict', $run_fanout_analysis = false) {
         // Allow this script to run for up to 3 minutes to prevent timeouts on complex pages.
         @set_time_limit(180);
 
@@ -223,6 +224,14 @@ class OntologizerProcessor {
             }
         }
         $salience_tips = $this->get_salience_improvement_tips($main_topic, $irrelevant_entities);
+        // Step 7: Run Gemini fan-out analysis if requested
+        $fanout_analysis = null;
+        if ($run_fanout_analysis && !empty($this->api_keys['gemini'])) {
+            $start_time = microtime(true);
+            $fanout_analysis = $this->generate_fanout_analysis($html_content, $url);
+            error_log(sprintf('Ontologizer: Fan-out analysis took %.2f seconds.', microtime(true) - $start_time));
+        }
+
         $result = array(
             'url' => $url,
             'entities' => $enriched_entities,
@@ -244,6 +253,7 @@ class OntologizerProcessor {
             'page_title' => $text_parts['title'],
             'openai_token_usage' => $this->openai_token_usage,
             'openai_cost_usd' => round($this->openai_cost_usd, 6),
+            'fanout_analysis' => $fanout_analysis,
         );
         
         // Cache the result
@@ -3276,7 +3286,7 @@ Content:
         return $enriched_entities;
     }
 
-    public function process_pasted_content($content, $main_topic_strategy = 'strict') {
+    public function process_pasted_content($content, $main_topic_strategy = 'strict', $run_fanout_analysis = false) {
         // Step 1: Detect content type and convert to structured format
         $processed_content = $this->process_pasted_content_format($content);
         $html_content = $processed_content['html'];
@@ -3382,6 +3392,14 @@ Content:
         }
         $salience_tips = $this->get_salience_improvement_tips($main_topic, $irrelevant_entities);
         
+        // Run Gemini fan-out analysis if requested
+        $fanout_analysis = null;
+        if ($run_fanout_analysis && !empty($this->api_keys['gemini'])) {
+            $start_time = microtime(true);
+            $fanout_analysis = $this->generate_fanout_analysis($processed_content['html'], '');
+            error_log(sprintf('Ontologizer: Fan-out analysis took %.2f seconds.', microtime(true) - $start_time));
+        }
+        
         $result = array(
             'url' => '',
             'entities' => $enriched_entities,
@@ -3405,6 +3423,7 @@ Content:
             'page_title' => $text_parts['title'],
             'openai_token_usage' => $this->openai_token_usage,
             'openai_cost_usd' => round($this->openai_cost_usd, 6),
+            'fanout_analysis' => $fanout_analysis,
         );
         
         return $result;
@@ -4738,4 +4757,294 @@ Content:
          // Return first significant link found
          return !empty($significant_links) ? $significant_links[0] : null;
      }
+
+    /**
+     * Process fan-out analysis only for pasted content
+     */
+    public function process_fanout_analysis_only($content) {
+        @set_time_limit(180);
+        
+        $processed_content = $this->process_pasted_content_format($content);
+        $fanout_analysis = $this->generate_fanout_analysis($processed_content['html'], '');
+        
+        return array(
+            'fanout_only' => true,
+            'fanout_analysis' => $fanout_analysis,
+            'processing_time' => microtime(true) - $_SERVER['REQUEST_TIME_FLOAT'],
+            'timestamp' => time(),
+        );
+    }
+
+    /**
+     * Process fan-out analysis only for URL
+     */
+    public function process_fanout_analysis_only_url($url) {
+        @set_time_limit(180);
+        
+        // Validate URL
+        if (!filter_var($url, FILTER_VALIDATE_URL)) {
+            throw new Exception('Invalid URL format provided');
+        }
+        
+        // Fetch webpage
+        $html_content = $this->fetch_webpage($url);
+        if (!$html_content) {
+            throw new Exception('Failed to fetch webpage content. Please check the URL and try again.');
+        }
+        
+        $fanout_analysis = $this->generate_fanout_analysis($html_content, $url);
+        
+        return array(
+            'url' => $url,
+            'fanout_only' => true,
+            'fanout_analysis' => $fanout_analysis,
+            'processing_time' => microtime(true) - $_SERVER['REQUEST_TIME_FLOAT'],
+            'timestamp' => time(),
+        );
+    }
+
+    /**
+     * Generate Google AI Mode query fan-out analysis using Gemini API
+     */
+    private function generate_fanout_analysis($html_content, $url = '') {
+        if (empty($this->api_keys['gemini'])) {
+            return array(
+                'error' => 'Gemini API key not configured'
+            );
+        }
+
+        // Extract semantic chunks from HTML
+        $chunks = $this->extract_semantic_chunks($html_content);
+        
+        // Create comprehensive prompt for Gemini
+        $prompt = $this->build_fanout_prompt($chunks, $url);
+        
+        // Call Gemini API
+        $response = $this->call_gemini_api($prompt);
+        
+        if (!$response || isset($response['error'])) {
+            return array(
+                'error' => $response['error'] ?? 'Failed to generate fan-out analysis',
+                'chunks_extracted' => count($chunks)
+            );
+        }
+        
+        return array(
+            'analysis' => $response,
+            'chunks_extracted' => count($chunks),
+            'chunks' => $chunks
+        );
+    }
+
+    /**
+     * Extract semantic chunks from HTML content (layout-aware chunking)
+     */
+    private function extract_semantic_chunks($html_content) {
+        $chunks = [];
+        
+        if (empty($html_content)) {
+            return $chunks;
+        }
+        
+        $dom = new DOMDocument();
+        @$dom->loadHTML('<?xml encoding="utf-8" ?>' . $html_content);
+        $xpath = new DOMXPath($dom);
+        
+        // Extract title and main heading
+        $title = '';
+        $h1 = '';
+        
+        $title_nodes = $dom->getElementsByTagName('title');
+        if ($title_nodes->length > 0) {
+            $title = trim($title_nodes->item(0)->textContent);
+        }
+        
+        $h1_nodes = $dom->getElementsByTagName('h1');
+        if ($h1_nodes->length > 0) {
+            $h1 = trim($h1_nodes->item(0)->textContent);
+        }
+        
+        if ($title || $h1) {
+            $chunks[] = array(
+                'type' => 'primary_topic',
+                'content' => trim($title . ' ' . $h1)
+            );
+        }
+        
+        // Extract headings and their content (layout-aware chunking)
+        $heading_nodes = $xpath->query('//h2 | //h3');
+        foreach ($heading_nodes as $heading) {
+            $heading_text = trim($heading->textContent);
+            $section_content = '';
+            
+            // Get content until next heading of same or higher level
+            $current_level = intval(substr($heading->tagName, 1));
+            $next_sibling = $heading->nextSibling;
+            
+            while ($next_sibling) {
+                if ($next_sibling->nodeType === XML_ELEMENT_NODE) {
+                    $tag_name = strtolower($next_sibling->tagName);
+                    
+                    // Stop if we hit another heading of same or higher level
+                    if (preg_match('/^h[1-6]$/', $tag_name)) {
+                        $sibling_level = intval(substr($tag_name, 1));
+                        if ($sibling_level <= $current_level) {
+                            break;
+                        }
+                    }
+                    
+                    $text = trim($next_sibling->textContent);
+                    if ($text) {
+                        $section_content .= ' ' . $text;
+                    }
+                }
+                $next_sibling = $next_sibling->nextSibling;
+            }
+            
+            if ($section_content) {
+                $chunks[] = array(
+                    'type' => 'section',
+                    'heading' => $heading_text,
+                    'content' => trim(substr($section_content, 0, 500))
+                );
+            }
+        }
+        
+        // Extract key lists and FAQs
+        $list_nodes = $xpath->query('//ul | //ol');
+        $list_count = 0;
+        foreach ($list_nodes as $list) {
+            if ($list_count >= 5) break; // Limit to 5 lists
+            
+            $list_items = $xpath->query('.//li', $list);
+            if ($list_items->length > 2) {
+                $items = array();
+                foreach ($list_items as $item) {
+                    $items[] = trim($item->textContent);
+                }
+                
+                $chunks[] = array(
+                    'type' => 'list',
+                    'content' => substr(implode(' | ', $items), 0, 300)
+                );
+                $list_count++;
+            }
+        }
+        
+        // Extract schema.org data if present
+        $schema_nodes = $xpath->query('//script[@type="application/ld+json"]');
+        foreach ($schema_nodes as $schema) {
+            try {
+                $data = json_decode($schema->textContent, true);
+                if (isset($data['@type'])) {
+                    $chunks[] = array(
+                        'type' => 'structured_data',
+                        'content' => sprintf('Type: %s, %s', 
+                            $data['@type'], 
+                            substr(json_encode($data), 0, 200)
+                        )
+                    );
+                }
+            } catch (Exception $e) {
+                // Ignore JSON parse errors
+            }
+        }
+        
+        return $chunks;
+    }
+
+    /**
+     * Build comprehensive prompt for Gemini
+     */
+    private function build_fanout_prompt($chunks, $url = '') {
+        $url_text = $url ? "URL: $url\n\n" : '';
+        
+        $prompt = "You are analyzing a webpage for Google's AI Mode query fan-out potential. Google's AI Mode decomposes user queries into multiple sub-queries to synthesize comprehensive answers.\n\n";
+        
+        $prompt .= $url_text;
+        
+        $prompt .= "SEMANTIC CHUNKS FROM PAGE:\n";
+        $prompt .= json_encode($chunks, JSON_PRETTY_PRINT) . "\n\n";
+        
+        $prompt .= "Based on this content, perform the following analysis:\n\n";
+        $prompt .= "1. IDENTIFY PRIMARY ENTITY: What is the main ontological entity or topic of this page?\n\n";
+        $prompt .= "2. PREDICT FAN-OUT QUERIES: Generate 8-10 likely sub-queries that Google's AI might create when a user asks about this topic. Consider:\n";
+        $prompt .= "   - Related queries (broader context)\n";
+        $prompt .= "   - Implicit queries (unstated user needs)\n";
+        $prompt .= "   - Comparative queries (alternatives, comparisons)\n";
+        $prompt .= "   - Procedural queries (how-to aspects)\n";
+        $prompt .= "   - Contextual refinements (budget, size, location specifics)\n\n";
+        $prompt .= "3. SEMANTIC COVERAGE SCORE: For each predicted query, assess if the page content provides information to answer it (Yes/Partial/No).\n\n";
+        $prompt .= "4. FOLLOW-UP QUESTION POTENTIAL: What follow-up questions would users likely ask after reading this content?\n\n";
+        $prompt .= "OUTPUT FORMAT:\n";
+        $prompt .= "PRIMARY ENTITY: [entity name]\n\n";
+        $prompt .= "FAN-OUT QUERIES:\n";
+        $prompt .= "• [Query 1] - Coverage: [Yes/Partial/No]\n";
+        $prompt .= "• [Query 2] - Coverage: [Yes/Partial/No]\n";
+        $prompt .= "...\n\n";
+        $prompt .= "FOLLOW-UP POTENTIAL:\n";
+        $prompt .= "• [Follow-up question 1]\n";
+        $prompt .= "• [Follow-up question 2]\n";
+        $prompt .= "...\n\n";
+        $prompt .= "COVERAGE SCORE: [X/10 queries covered]\n";
+        $prompt .= "RECOMMENDATIONS: [Specific content gaps to fill]";
+        
+        return $prompt;
+    }
+
+    /**
+     * Call Gemini API
+     */
+    private function call_gemini_api($prompt) {
+        $api_key = $this->api_keys['gemini'];
+        $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" . urlencode($api_key);
+        
+        $request_data = array(
+            'contents' => array(
+                array(
+                    'parts' => array(
+                        array('text' => $prompt)
+                    )
+                )
+            ),
+            'generationConfig' => array(
+                'temperature' => 0.3,
+                'topK' => 20,
+                'topP' => 0.9,
+                'maxOutputTokens' => 2048
+            )
+        );
+        
+        $response = wp_remote_post($url, array(
+            'timeout' => 60,
+            'headers' => array(
+                'Content-Type' => 'application/json'
+            ),
+            'body' => json_encode($request_data)
+        ));
+        
+        if (is_wp_error($response)) {
+            error_log('Ontologizer Gemini API Error: ' . $response->get_error_message());
+            return array('error' => 'API request failed: ' . $response->get_error_message());
+        }
+        
+        $status_code = wp_remote_retrieve_response_code($response);
+        $body = wp_remote_retrieve_body($response);
+        
+        if ($status_code !== 200) {
+            error_log('Ontologizer Gemini API HTTP Error: ' . $status_code . ' - ' . $body);
+            return array('error' => "API error: HTTP $status_code");
+        }
+        
+        $data = json_decode($body, true);
+        
+        if (!$data || !isset($data['candidates'][0]['content']['parts'][0]['text'])) {
+            error_log('Ontologizer Gemini API Invalid Response: ' . $body);
+            return array('error' => 'Invalid API response format');
+        }
+        
+        $analysis = $data['candidates'][0]['content']['parts'][0]['text'];
+        
+        return $analysis;
+    }
 }  

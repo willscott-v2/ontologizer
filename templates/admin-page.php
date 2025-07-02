@@ -25,6 +25,16 @@
             <h3><?php _e('Example', 'ontologizer'); ?></h3>
             <pre><code>[ontologizer title="Entity Extractor" placeholder="Enter webpage URL..."]</code></pre>
             
+            <h3><?php _e('Fan-out Analysis Preview', 'ontologizer'); ?></h3>
+            <p><?php _e('The new Google AI Mode query fan-out analysis provides rich, structured insights:', 'ontologizer'); ?></p>
+            <ul>
+                <li><?php _e('<strong>Primary Entity Identification:</strong> Automatically identifies the main topic', 'ontologizer'); ?></li>
+                <li><?php _e('<strong>Predicted Fan-out Queries:</strong> 8-10 likely sub-queries Google\'s AI might generate', 'ontologizer'); ?></li>
+                <li><?php _e('<strong>Coverage Assessment:</strong> Visual indicators showing Yes/Partial/No coverage', 'ontologizer'); ?></li>
+                <li><?php _e('<strong>Interactive Results:</strong> Beautiful cards, progress indicators, and structured layout', 'ontologizer'); ?></li>
+                <li><?php _e('<strong>Actionable Recommendations:</strong> Specific content gaps and optimization suggestions', 'ontologizer'); ?></li>
+            </ul>
+            
             <h2><?php _e('How It Works', 'ontologizer'); ?></h2>
             <ol>
                 <li><?php _e('Enter a URL to analyze', 'ontologizer'); ?></li>
@@ -32,6 +42,7 @@
                 <li><?php _e('Entities are enriched with data from Wikipedia, Wikidata, Google Knowledge Graph, and ProductOntology', 'ontologizer'); ?></li>
                 <li><?php _e('JSON-LD structured data is generated for SEO optimization', 'ontologizer'); ?></li>
                 <li><?php _e('Content recommendations are provided for improvement', 'ontologizer'); ?></li>
+                <li><?php _e('<strong>NEW:</strong> Google AI Mode query fan-out analysis predicts how Google\'s AI might decompose user queries about your content', 'ontologizer'); ?></li>
             </ol>
         </div>
         

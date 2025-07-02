@@ -40,6 +40,18 @@
                     Override cache for this URL (force fresh analysis)
                 </label>
             </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="ontologizer-fanout-analysis" name="run_fanout_analysis" value="1">
+                    Run Google AI Mode query fan-out analysis alongside regular analysis (requires Gemini API key)
+                </label>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="ontologizer-fanout-only" name="fanout_only" value="1">
+                    Run ONLY fan-out analysis (skip entity extraction and schema generation)
+                </label>
+            </div>
             <button type="submit" class="ontologizer-button">
                 <span class="button-text">Analyze</span>
                 <span class="loading-spinner" style="display: none;">
@@ -69,6 +81,7 @@
             <button class="tab-button active" data-tab="entities">Entities</button>
             <button class="tab-button" data-tab="json-ld">JSON-LD</button>
             <button class="tab-button" data-tab="recommendations">Recommendations</button>
+            <button class="tab-button" data-tab="fanout" style="display:none;">Fan-out Analysis</button>
         </div>
         
         <div class="tab-content">
@@ -82,6 +95,10 @@
             
             <div id="tab-recommendations" class="tab-pane">
                 <div id="recommendations-list"></div>
+            </div>
+            
+            <div id="tab-fanout" class="tab-pane">
+                <div id="fanout-analysis-content"></div>
             </div>
         </div>
     </div>

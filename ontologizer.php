@@ -3,7 +3,7 @@
  * Plugin Name: Ontologizer
  * Plugin URI: https://github.com/willscott-v2/ontologizer
  * Description: Automatically extract named entities from webpages and enrich them with structured identifiers from Wikipedia, Wikidata, Google's Knowledge Graph, and ProductOntology.
- * Version: 1.7.2
+ * Version: 2.1.0
  * Author: Will Scott
  * License: MIT License
  * Text Domain: ontologizer
@@ -15,7 +15,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('ONTOLOGIZER_VERSION', '1.7.2');
+define('ONTOLOGIZER_VERSION', '2.1.0');
 define('ONTOLOGIZER_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('ONTOLOGIZER_PLUGIN_PATH', plugin_dir_path(__FILE__));
 
@@ -51,9 +51,18 @@ function ontologizer_increment_version($current_version, $type = 'patch') {
 }
 
 // Include required files
-require_once ONTOLOGIZER_PLUGIN_PATH . 'includes/class-ontologizer-processor.php';
+if (file_exists(ONTOLOGIZER_PLUGIN_PATH . 'includes/class-ontologizer-processor.php')) {
+    require_once ONTOLOGIZER_PLUGIN_PATH . 'includes/class-ontologizer-processor.php';
+} else {
+    // Handle missing file gracefully
+    add_action('admin_notices', function() {
+        echo '<div class="notice notice-error"><p>Ontologizer Error: Required processor file is missing. Please reinstall the plugin.</p></div>';
+    });
+    return;
+}
 
 // Main Ontologizer class
+if (!class_exists('Ontologizer')) {
 class Ontologizer {
     
     public function __construct() {
@@ -87,6 +96,9 @@ class Ontologizer {
         if (!get_option('ontologizer_google_kg_key')) {
             add_option('ontologizer_google_kg_key', '');
         }
+        if (!get_option('ontologizer_gemini_key')) {
+            add_option('ontologizer_gemini_key', '');
+        }
         if (!get_option('ontologizer_cache_duration')) {
             add_option('ontologizer_cache_duration', 3600);
         }
@@ -118,6 +130,10 @@ class Ontologizer {
             'sanitize_callback' => 'sanitize_text_field'
         ));
         register_setting('ontologizer_options', 'ontologizer_google_kg_key', array(
+            'type' => 'string',
+            'sanitize_callback' => 'sanitize_text_field'
+        ));
+        register_setting('ontologizer_options', 'ontologizer_gemini_key', array(
             'type' => 'string',
             'sanitize_callback' => 'sanitize_text_field'
         ));
@@ -182,6 +198,14 @@ class Ontologizer {
         );
         
         add_settings_field(
+            'ontologizer_gemini_key',
+            __('Google Gemini API Key', 'ontologizer'),
+            array($this, 'gemini_key_callback'),
+            'ontologizer_options',
+            'ontologizer_api_section'
+        );
+        
+        add_settings_field(
             'ontologizer_cache_duration',
             __('Cache Duration (seconds)', 'ontologizer'),
             array($this, 'cache_duration_callback'),
@@ -236,6 +260,12 @@ class Ontologizer {
         $value = get_option('ontologizer_google_kg_key');
         echo '<input type="password" id="ontologizer_google_kg_key" name="ontologizer_google_kg_key" value="' . esc_attr($value) . '" class="regular-text">';
         echo '<p class="description">' . __('Optional. Used for enhanced entity enrichment. Get your key from <a href="https://console.cloud.google.com/apis/credentials" target="_blank">Google Cloud Console</a>.', 'ontologizer') . '</p>';
+    }
+    
+    public function gemini_key_callback() {
+        $value = get_option('ontologizer_gemini_key');
+        echo '<input type="password" id="ontologizer_gemini_key" name="ontologizer_gemini_key" value="' . esc_attr($value) . '" class="regular-text">';
+        echo '<p class="description">' . __('Optional. Used for Google AI Mode query fan-out analysis. Get your key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>.', 'ontologizer') . '</p>';
     }
     
     public function cache_duration_callback() {
@@ -324,6 +354,8 @@ class Ontologizer {
         $paste_content = isset($_POST['paste_content']) ? trim(stripslashes($_POST['paste_content'])) : '';
         $main_topic_strategy = isset($_POST['main_topic_strategy']) ? sanitize_text_field($_POST['main_topic_strategy']) : 'strict';
         $clear_cache = isset($_POST['clear_cache']) && $_POST['clear_cache'] == 1;
+        $run_fanout_analysis = isset($_POST['run_fanout_analysis']) && $_POST['run_fanout_analysis'] == 1;
+        $fanout_only = isset($_POST['fanout_only']) && $_POST['fanout_only'] == 1;
         $debug_mode = get_option('ontologizer_debug_mode', false);
         $debug_info = [];
         if (empty($url) && empty($paste_content)) {
@@ -337,9 +369,17 @@ class Ontologizer {
                 delete_transient($cache_key);
             }
             if (!empty($paste_content)) {
-                $result = $processor->process_pasted_content($paste_content, $main_topic_strategy);
+                if ($fanout_only) {
+                    $result = $processor->process_fanout_analysis_only($paste_content);
+                } else {
+                    $result = $processor->process_pasted_content($paste_content, $main_topic_strategy, $run_fanout_analysis);
+                }
             } else {
-                $result = $processor->process_url($url, $main_topic_strategy);
+                if ($fanout_only) {
+                    $result = $processor->process_fanout_analysis_only_url($url);
+                } else {
+                    $result = $processor->process_url($url, $main_topic_strategy, $run_fanout_analysis);
+                }
             }
             wp_send_json_success($result);
         } catch (Exception $e) {
@@ -416,4 +456,5 @@ class Ontologizer {
 }
 
 // Initialize the plugin
-new Ontologizer();  
+new Ontologizer();
+}  

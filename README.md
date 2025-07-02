@@ -1,8 +1,10 @@
 # Ontologizer WordPress Plugin
 
-**Version: 1.7.2**
+**Version: 1.8.0**
 
 A powerful WordPress plugin that automatically extracts named entities and key topics from webpages, enriching them with structured identifiers from Wikipedia, Wikidata, Google's Knowledge Graph, and ProductOntology. Generate SEO-optimized JSON-LD structured data and receive content optimization recommendations.
+
+**🆕 NEW in v1.8.0**: Google AI Mode Query Fan-out Analysis - Predict how Google's AI might decompose user queries about your content with beautiful, structured visual insights!
 
 For a detailed list of changes, see the [CHANGELOG.md](CHANGELOG.md) file.
 
@@ -12,6 +14,7 @@ Will Scott
 
 ## Features
 
+### Core Analysis Features
 - **Entity Extraction**: Automatically identify named entities (people, organizations, locations, products, etc.) from webpage content
 - **Multi-Source Enrichment**: Enrich entities with data from:
   - Wikipedia
@@ -20,9 +23,19 @@ Will Scott
   - ProductOntology
 - **JSON-LD Generation**: Create structured data markup for improved SEO
 - **Content Analysis**: Receive recommendations for content optimization
-- **Interactive Interface**: User-friendly frontend with tabbed results
+
+### 🆕 Google AI Mode Query Fan-out Analysis
+- **🔍 AI-Powered Query Prediction**: Uses Google's Gemini AI to predict how Google's AI might decompose user queries about your content
+- **🎯 Primary Entity Detection**: Automatically identifies the main ontological entity or topic
+- **📊 Predicted Fan-out Queries**: Generates 8-10 likely sub-queries with coverage assessment
+- **✅ Visual Coverage Indicators**: Color-coded Yes/Partial/No coverage status for each query
+- **💡 Actionable Recommendations**: Specific content gaps and optimization suggestions
+- **📈 Beautiful Visualizations**: Professional cards, progress indicators, and structured layouts
+
+### User Experience
+- **Interactive Interface**: User-friendly frontend with tabbed results and beautiful UI components
 - **WordPress Integration**: Easy installation and shortcode usage
-- **Cache Management**: Clear cached results directly from the admin dashboard.
+- **Cache Management**: Clear cached results directly from the admin dashboard
 - **New**: Users can now override the cache for a URL from the front-end form (force fresh analysis)
 - **Improved main topic extraction**: Now automatically detects course/program names from page titles (e.g., "AI Marketing Course")
 - **Improved contextual entity handling**: For Person topics, related entities like cuisine, city, organization, restaurant, place, location, and region are no longer flagged as off-topic.
@@ -77,6 +90,12 @@ Use the shortcode `[ontologizer]` in any post or page:
 - Used for improved entity extraction
 - Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)
 - Without this key, the plugin uses basic entity extraction
+
+### Google Gemini API (Optional) 🆕
+- **Required for Google AI Mode Query Fan-out Analysis**
+- Used to predict how Google's AI might decompose user queries about your content
+- Get your API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
+- Without this key, fan-out analysis features will not be available
 
 ### Google Knowledge Graph API (Optional)
 - Used for enhanced entity enrichment
@@ -165,7 +184,7 @@ The script automatically:
 
 After running the script, remember to:
 1. Update CHANGELOG.md with your changes
-2. Repackage: `rm -f ontologizer.zip && zip -r ontologizer.zip ontologizer.php includes/ assets/ templates/ README.md LICENSE CHANGELOG.md ROADMAP.md install.php`
+2. Repackage: `rm -f ontologizer.zip && zip -r ontologizer.zip . -x "*.git*" "node_modules/*" "*.DS_Store" "*.zip"`
 3. Test the updated plugin
 4. Commit your changes
 

@@ -50,7 +50,9 @@ jQuery(document).ready(function($) {
                 paste_content: pasteContent,
                 nonce: ontologizer_ajax.nonce,
                 main_topic_strategy: $('#main-topic-strategy').val(),
-                clear_cache: $('#ontologizer-clear-cache').is(':checked') ? 1 : 0
+                clear_cache: $('#ontologizer-clear-cache').is(':checked') ? 1 : 0,
+                run_fanout_analysis: $('#ontologizer-fanout-analysis').is(':checked') ? 1 : 0,
+                fanout_only: $('#ontologizer-fanout-only').is(':checked') ? 1 : 0
             },
             timeout: 170000, // 170 second timeout, just under the server's 180s limit
             success: function(response) {
@@ -207,16 +209,47 @@ jQuery(document).ready(function($) {
                 throw new Error('Invalid data structure received');
             }
 
-            // Display entities
-            displayEntities(data.entities || []);
+            // Check if this is a fan-out only analysis
+            const isFanoutOnly = data.fanout_only;
             
-            // Display JSON-LD
-            displayJsonLd(data.json_ld || {});
-            
-            // New: get tips and irrelevantEntities from data if present
-            const tips = data.salience_tips || [];
-            const irrelevantEntities = data.irrelevant_entities || [];
-            displayRecommendations(data.recommendations || [], tips, irrelevantEntities);
+            if (isFanoutOnly) {
+                // Hide entity, JSON-LD, and recommendations tabs for fan-out only
+                $('.tab-button[data-tab="entities"]').hide();
+                $('.tab-button[data-tab="json-ld"]').hide();
+                $('.tab-button[data-tab="recommendations"]').hide();
+                $('.tab-button[data-tab="fanout"]').show().addClass('active');
+                
+                // Show only fan-out tab content
+                $('.tab-pane').removeClass('active');
+                $('#tab-fanout').addClass('active');
+                
+                // Display fan-out analysis
+                displayFanoutAnalysis(data.fanout_analysis);
+            } else {
+                // Normal flow - show all tabs
+                $('.tab-button[data-tab="entities"]').show();
+                $('.tab-button[data-tab="json-ld"]').show();
+                $('.tab-button[data-tab="recommendations"]').show();
+                
+                // Display entities
+                displayEntities(data.entities || []);
+                
+                // Display JSON-LD
+                displayJsonLd(data.json_ld || {});
+                
+                // New: get tips and irrelevantEntities from data if present
+                const tips = data.salience_tips || [];
+                const irrelevantEntities = data.irrelevant_entities || [];
+                displayRecommendations(data.recommendations || [], tips, irrelevantEntities);
+                
+                // Display fan-out analysis if available
+                if (data.fanout_analysis) {
+                    $('.tab-button[data-tab="fanout"]').show();
+                    displayFanoutAnalysis(data.fanout_analysis);
+                } else {
+                    $('.tab-button[data-tab="fanout"]').hide();
+                }
+            }
             
             // Display processing stats and salience score
             displayStats(data);
@@ -312,6 +345,256 @@ jQuery(document).ready(function($) {
         
         // Auto-resize after content is loaded
         setTimeout(autoResizeTextarea, 100);
+    }
+    
+    function displayFanoutAnalysis(fanoutData) {
+        const container = $('#fanout-analysis-content');
+        container.empty();
+        
+        if (!fanoutData) {
+            container.html('<p class="no-fanout">No fan-out analysis available.</p>');
+            return;
+        }
+        
+        if (fanoutData.error) {
+            container.html(`<p class="fanout-error">Error: ${fanoutData.error}</p>`);
+            return;
+        }
+        
+        let html = '<div class="fanout-analysis">';
+        
+        // Add chunks summary card
+        if (fanoutData.chunks_extracted) {
+            html += `<div class="fanout-summary-card">
+                <div class="summary-icon">📊</div>
+                <div class="summary-content">
+                    <h4>Content Analysis</h4>
+                    <p>Extracted <strong>${fanoutData.chunks_extracted}</strong> semantic chunks from the page content</p>
+                </div>
+            </div>`;
+        }
+        
+        // Parse and display the analysis in a structured way
+        if (fanoutData.analysis) {
+            const parsedAnalysis = parseFanoutAnalysis(fanoutData.analysis);
+            html += displayParsedFanoutAnalysis(parsedAnalysis);
+        }
+        
+        // Add debugging info if chunks are available
+        if (fanoutData.chunks && fanoutData.chunks.length > 0) {
+            html += `<div class="fanout-debug-section">
+                <details class="fanout-debug-details">
+                    <summary>View Extracted Content Chunks (Debug)</summary>
+                    <div class="fanout-debug-content">
+                        <pre class="fanout-debug-json">${JSON.stringify(fanoutData.chunks, null, 2)}</pre>
+                    </div>
+                </details>
+            </div>`;
+        }
+        
+        html += '</div>';
+        container.html(html);
+    }
+    
+    function parseFanoutAnalysis(analysisText) {
+        const result = {
+            primaryEntity: '',
+            fanoutQueries: [],
+            followupQuestions: [],
+            coverageScore: '',
+            recommendations: ''
+        };
+        
+        const lines = analysisText.split('\n');
+        let currentSection = '';
+        
+        for (let line of lines) {
+            line = line.trim();
+            if (!line) continue;
+            
+            if (line.startsWith('PRIMARY ENTITY:')) {
+                result.primaryEntity = line.replace('PRIMARY ENTITY:', '').trim();
+                currentSection = 'primary';
+            } else if (line.includes('FAN-OUT QUERIES:')) {
+                currentSection = 'fanout';
+            } else if (line.includes('FOLLOW-UP POTENTIAL:')) {
+                currentSection = 'followup';
+            } else if (line.startsWith('COVERAGE SCORE:')) {
+                result.coverageScore = line.replace('COVERAGE SCORE:', '').trim();
+                currentSection = 'coverage';
+            } else if (line.startsWith('RECOMMENDATIONS:')) {
+                currentSection = 'recommendations';
+                result.recommendations = line.replace('RECOMMENDATIONS:', '').trim();
+            } else if (line.startsWith('•') || line.startsWith('-')) {
+                const item = line.replace(/^[•-]\s*/, '').trim();
+                
+                if (currentSection === 'fanout') {
+                    // Parse fan-out queries with coverage
+                    const match = item.match(/^(.+?)\s*-\s*Coverage:\s*(.+)$/);
+                    if (match) {
+                        result.fanoutQueries.push({
+                            query: match[1].trim(),
+                            coverage: match[2].trim()
+                        });
+                    } else {
+                        result.fanoutQueries.push({
+                            query: item,
+                            coverage: 'Unknown'
+                        });
+                    }
+                } else if (currentSection === 'followup') {
+                    result.followupQuestions.push(item);
+                }
+            } else if (currentSection === 'recommendations' && line) {
+                if (result.recommendations) {
+                    result.recommendations += ' ' + line;
+                } else {
+                    result.recommendations = line;
+                }
+            }
+        }
+        
+        return result;
+    }
+    
+    function displayParsedFanoutAnalysis(analysis) {
+        let html = '<div class="fanout-structured-content">';
+        
+        // Primary Entity Section
+        if (analysis.primaryEntity) {
+            html += `<div class="fanout-section primary-entity-section">
+                <div class="section-header">
+                    <div class="section-icon">🎯</div>
+                    <h3>Primary Entity</h3>
+                </div>
+                <div class="primary-entity-card">
+                    <div class="entity-name-large">${analysis.primaryEntity}</div>
+                </div>
+            </div>`;
+        }
+        
+        // Fan-out Queries Section
+        if (analysis.fanoutQueries && analysis.fanoutQueries.length > 0) {
+            html += `<div class="fanout-section fanout-queries-section">
+                <div class="section-header">
+                    <div class="section-icon">🔍</div>
+                    <h3>Predicted Fan-out Queries</h3>
+                    <div class="section-subtitle">How Google's AI might decompose user queries about this content</div>
+                </div>
+                <div class="fanout-queries-grid">`;
+            
+            analysis.fanoutQueries.forEach((query, index) => {
+                const coverageClass = getCoverageClass(query.coverage);
+                const coverageIcon = getCoverageIcon(query.coverage);
+                
+                html += `<div class="fanout-query-card">
+                    <div class="query-number">${index + 1}</div>
+                    <div class="query-content">
+                        <div class="query-text">${query.query}</div>
+                        <div class="query-coverage ${coverageClass}">
+                            <span class="coverage-icon">${coverageIcon}</span>
+                            <span class="coverage-text">Coverage: ${query.coverage}</span>
+                        </div>
+                    </div>
+                </div>`;
+            });
+            
+            html += '</div></div>';
+        }
+        
+        // Coverage Score Section
+        if (analysis.coverageScore) {
+            const scoreMatch = analysis.coverageScore.match(/(\d+)\/(\d+)/);
+            let scorePercentage = 0;
+            let scoreColor = '#dc3545';
+            
+            if (scoreMatch) {
+                const covered = parseInt(scoreMatch[1]);
+                const total = parseInt(scoreMatch[2]);
+                scorePercentage = Math.round((covered / total) * 100);
+                
+                if (scorePercentage >= 80) scoreColor = '#28a745';
+                else if (scorePercentage >= 60) scoreColor = '#ffc107';
+                else if (scorePercentage >= 40) scoreColor = '#fd7e14';
+            }
+            
+            html += `<div class="fanout-section coverage-section">
+                <div class="section-header">
+                    <div class="section-icon">📈</div>
+                    <h3>Coverage Analysis</h3>
+                </div>
+                <div class="coverage-score-card">
+                    <div class="coverage-score-visual">
+                        <div class="score-circle" style="border-color: ${scoreColor};">
+                            <div class="score-number" style="color: ${scoreColor};">${scorePercentage}%</div>
+                        </div>
+                    </div>
+                    <div class="coverage-details">
+                        <div class="coverage-text">${analysis.coverageScore}</div>
+                        <div class="coverage-description">
+                            ${scorePercentage >= 80 ? 'Excellent coverage! Your content addresses most predicted queries.' :
+                              scorePercentage >= 60 ? 'Good coverage with room for improvement.' :
+                              scorePercentage >= 40 ? 'Moderate coverage. Consider adding more comprehensive content.' :
+                              'Limited coverage. Significant content gaps identified.'}
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        }
+        
+        // Follow-up Questions Section
+        if (analysis.followupQuestions && analysis.followupQuestions.length > 0) {
+            html += `<div class="fanout-section followup-section">
+                <div class="section-header">
+                    <div class="section-icon">💭</div>
+                    <h3>Follow-up Question Potential</h3>
+                    <div class="section-subtitle">Questions users might ask after reading your content</div>
+                </div>
+                <div class="followup-questions-list">`;
+            
+            analysis.followupQuestions.forEach((question, index) => {
+                html += `<div class="followup-question-item">
+                    <div class="question-icon">❓</div>
+                    <div class="question-text">${question}</div>
+                </div>`;
+            });
+            
+            html += '</div></div>';
+        }
+        
+        // Recommendations Section
+        if (analysis.recommendations) {
+            // Escape HTML and format recommendations properly
+            const escapedRecommendations = $('<div>').text(analysis.recommendations).html();
+            html += `<div class="fanout-section recommendations-section">
+                <div class="section-header">
+                    <div class="section-icon">💡</div>
+                    <h3>Optimization Recommendations</h3>
+                </div>
+                <div class="fanout-recommendations-card">
+                    <div class="recommendations-text">${escapedRecommendations}</div>
+                </div>
+            </div>`;
+        }
+        
+        html += '</div>';
+        return html;
+    }
+    
+    function getCoverageClass(coverage) {
+        const coverageLower = coverage.toLowerCase();
+        if (coverageLower.includes('yes')) return 'coverage-yes';
+        if (coverageLower.includes('partial')) return 'coverage-partial';
+        if (coverageLower.includes('no')) return 'coverage-no';
+        return 'coverage-unknown';
+    }
+    
+    function getCoverageIcon(coverage) {
+        const coverageLower = coverage.toLowerCase();
+        if (coverageLower.includes('yes')) return '✅';
+        if (coverageLower.includes('partial')) return '⚠️';
+        if (coverageLower.includes('no')) return '❌';
+        return '❓';
     }
     
     function displayRecommendations(recommendations, tips = [], irrelevantEntities = []) {
@@ -454,6 +737,10 @@ jQuery(document).ready(function($) {
     // Auto-focus URL input
     $('#ontologizer-url').focus();
     
+    // Fan-out analysis logic - checkboxes work independently
+    // No automatic checkbox interactions - let the user control each checkbox separately
+    // The backend will handle the logic appropriately
+    
     // URL input validation
     $('#ontologizer-url').on('input', function() {
         const url = $(this).val().trim();
@@ -487,7 +774,11 @@ jQuery(document).ready(function($) {
     }
     $(document).on('click', '#ontologizer-download-md', function() {
         const data = window.lastOntologizerData || {};
-        if (!data || !data.entities || !data.json_ld) {
+        // Check if we have either regular analysis data or fan-out analysis data
+        const hasRegularData = data && data.entities && data.json_ld;
+        const hasFanoutData = data && data.fanout_analysis && data.fanout_analysis.analysis;
+        
+        if (!hasRegularData && !hasFanoutData) {
             alert('No analysis data available. Please run an analysis first.');
             return;
         }
@@ -498,57 +789,107 @@ jQuery(document).ready(function($) {
         } else {
             md += '# (No page title found)\n';
         }
-        md += `\n## Ontologizer Analysis\n`;
+        
+        // Analysis type header
+        if (hasFanoutData && !hasRegularData) {
+            md += `\n## Google AI Mode Query Fan-out Analysis\n`;
+        } else {
+            md += `\n## Ontologizer Analysis\n`;
+        }
+        
+        // Basic metadata
         if (data.url) md += `**URL:** ${data.url}\n`;
         if (data.primary_topic) md += `**Primary Topic:** ${data.primary_topic}\n`;
         if (typeof data.topical_salience !== 'undefined') md += `**Salience:** ${data.topical_salience}%\n`;
         if (typeof data.processing_time !== 'undefined') md += `**Processing Time:** ${data.processing_time.toFixed(2)}s\n`;
         if (typeof data.entities_count !== 'undefined') md += `**Entities Found:** ${data.entities_count}\n`;
         if (typeof data.enriched_count !== 'undefined') md += `**Enriched Entities:** ${data.enriched_count}\n`;
-        md += `**Version:** ${ontologizer_ajax.version || '1.44.3'}\n`;
+        md += `**Version:** ${ontologizer_ajax.version || '2.1.0'}\n`;
         md += '\n---\n';
-        // Entities
-        md += `\n## Entities\n`;
-        if (data.entities && data.entities.length > 0) {
-            md += '| Entity | Confidence | Wikipedia | Wikidata | Google KG | ProductOntology |\n';
-            md += '|--------|------------|-----------|----------|----------|-----------------|\n';
-            data.entities.forEach(function(entity) {
-                md += `| ${entity.name || '(missing)'} | ${entity.confidence_score || ''}% | ` +
-                    (entity.wikipedia_url ? `[Wikipedia](${entity.wikipedia_url})` : '') + ' | ' +
-                    (entity.wikidata_url ? `[Wikidata](${entity.wikidata_url})` : '') + ' | ' +
-                    (entity.google_kg_url ? `[Google KG](${entity.google_kg_url})` : '') + ' | ' +
-                    (entity.productontology_url ? `[ProductOntology](${entity.productontology_url})` : '') + ' |\n';
-            });
-        } else {
-            md += '_No entities found._\n';
+        
+        // Fan-out Analysis Section
+        if (hasFanoutData) {
+            const fanoutAnalysis = parseFanoutAnalysis(data.fanout_analysis.analysis);
+            
+            md += `\n## Fan-out Analysis\n\n`;
+            
+            if (fanoutAnalysis.primaryEntity) {
+                md += `**Primary Entity:** ${fanoutAnalysis.primaryEntity}\n\n`;
+            }
+            
+            if (fanoutAnalysis.fanoutQueries && fanoutAnalysis.fanoutQueries.length > 0) {
+                md += `### Predicted Fan-out Queries\n\n`;
+                fanoutAnalysis.fanoutQueries.forEach(function(query, index) {
+                    md += `${index + 1}. **${query.query}**\n   - Coverage: ${query.coverage}\n\n`;
+                });
+            }
+            
+            if (fanoutAnalysis.coverageScore) {
+                md += `### Coverage Score\n${fanoutAnalysis.coverageScore}\n\n`;
+            }
+            
+            if (fanoutAnalysis.followupQuestions && fanoutAnalysis.followupQuestions.length > 0) {
+                md += `### Follow-up Questions\n\n`;
+                fanoutAnalysis.followupQuestions.forEach(function(question, index) {
+                    md += `- ${question}\n`;
+                });
+                md += '\n';
+            }
+            
+            if (fanoutAnalysis.recommendations) {
+                md += `### Optimization Recommendations\n${fanoutAnalysis.recommendations}\n\n`;
+            }
+            
+            if (data.fanout_analysis.chunks_extracted) {
+                md += `**Content Chunks Extracted:** ${data.fanout_analysis.chunks_extracted}\n\n`;
+            }
         }
-        // JSON-LD
-        md += `\n## JSON-LD\n`;
-        if (data.json_ld) {
-            md += '```json\n' + JSON.stringify(data.json_ld, null, 2) + '\n```\n';
-        } else {
-            md += '_No JSON-LD generated._\n';
-        }
-        // Recommendations
-        md += `\n## Recommendations\n`;
-        if (data.salience_tips && data.salience_tips.length > 0) {
-            md += '**How to improve topical salience:**\n';
-            data.salience_tips.forEach(function(tip) { md += '- ' + tip + '\n'; });
-        }
-        if (data.irrelevant_entities && data.irrelevant_entities.length > 0) {
-            md += '\n**Irrelevant entities/content to consider removing:** ' + data.irrelevant_entities.join(', ') + '\n';
-        }
-        if (data.recommendations && data.recommendations.length > 0) {
-            md += '\n';
-            data.recommendations.forEach(function(rec, i) {
-                if (typeof rec === 'object' && rec.advice) {
-                    md += `${i+1}. **${rec.category || ''}**: ${rec.advice}\n`;
-                } else {
-                    md += `${i+1}. ${rec}\n`;
-                }
-            });
-        } else {
-            md += '_No recommendations available._\n';
+        
+        // Regular analysis sections (only if we have regular data)
+        if (hasRegularData) {
+            // Entities
+            md += `\n## Entities\n`;
+            if (data.entities && data.entities.length > 0) {
+                md += '| Entity | Confidence | Wikipedia | Wikidata | Google KG | ProductOntology |\n';
+                md += '|--------|------------|-----------|----------|----------|-----------------|\n';
+                data.entities.forEach(function(entity) {
+                    md += `| ${entity.name || '(missing)'} | ${entity.confidence_score || ''}% | ` +
+                        (entity.wikipedia_url ? `[Wikipedia](${entity.wikipedia_url})` : '') + ' | ' +
+                        (entity.wikidata_url ? `[Wikidata](${entity.wikidata_url})` : '') + ' | ' +
+                        (entity.google_kg_url ? `[Google KG](${entity.google_kg_url})` : '') + ' | ' +
+                        (entity.productontology_url ? `[ProductOntology](${entity.productontology_url})` : '') + ' |\n';
+                });
+            } else {
+                md += '_No entities found._\n';
+            }
+            // JSON-LD
+            md += `\n## JSON-LD\n`;
+            if (data.json_ld) {
+                md += '```json\n' + JSON.stringify(data.json_ld, null, 2) + '\n```\n';
+            } else {
+                md += '_No JSON-LD generated._\n';
+            }
+            // Recommendations
+            md += `\n## Recommendations\n`;
+            if (data.salience_tips && data.salience_tips.length > 0) {
+                md += '**How to improve topical salience:**\n';
+                data.salience_tips.forEach(function(tip) { md += '- ' + tip + '\n'; });
+            }
+            if (data.irrelevant_entities && data.irrelevant_entities.length > 0) {
+                md += '\n**Irrelevant entities/content to consider removing:** ' + data.irrelevant_entities.join(', ') + '\n';
+            }
+            if (data.recommendations && data.recommendations.length > 0) {
+                md += '\n';
+                data.recommendations.forEach(function(rec, i) {
+                    if (typeof rec === 'object' && rec.advice) {
+                        md += `${i+1}. **${rec.category || ''}**: ${rec.advice}\n`;
+                    } else {
+                        md += `${i+1}. ${rec}\n`;
+                    }
+                });
+            } else {
+                md += '_No recommendations available._\n';
+            }
         }
         // Sanitize filename
         let filename = 'ontologizer-analysis.md';

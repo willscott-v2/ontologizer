@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2024-12-19
+
+### Major Feature: Google AI Mode Query Fan-out Analysis
+- **🔍 Google AI Mode Integration**: Added comprehensive query fan-out analysis using Google's Gemini AI to predict how Google's AI might decompose user queries about your content
+- **🎯 Primary Entity Detection**: Automatically identifies the main ontological entity or topic of each page
+- **📊 Predicted Fan-out Queries**: Generates 8-10 likely sub-queries that Google's AI might create, including related, implicit, comparative, and procedural queries
+- **✅ Coverage Assessment**: Visual indicators showing Yes/Partial/No coverage for each predicted query with color-coded status
+- **💡 Actionable Recommendations**: Specific content gaps and optimization suggestions to improve AI query coverage
+- **📈 Coverage Score Visualization**: Beautiful circular progress indicators with percentage scores and contextual descriptions
+
+### Beautiful UI Components
+- **🎨 Structured Visual Interface**: Completely redesigned fan-out results with professional card layouts, icons, and gradients
+- **📋 Interactive Query Cards**: Grid layout with numbered queries, coverage indicators, and hover animations
+- **🔄 Smart Tab Management**: Fan-out analysis can run alongside other features or as a standalone analysis
+- **📱 Mobile-Responsive Design**: Optimized layouts for all screen sizes with touch-friendly interactions
+- **🎭 Rich Visual Feedback**: Icons, color coding, and animations throughout the interface
+
+### Technical Implementation
+- **🔧 Semantic Content Chunking**: Layout-aware extraction of primary topics, sections, lists, and structured data
+- **🤖 Gemini API Integration**: Full integration with Google's Gemini 1.5 Flash model for AI analysis
+- **⚙️ Flexible Processing Options**: Run fan-out analysis alongside existing features or as standalone analysis
+- **🗂️ Admin Configuration**: New Gemini API key field in WordPress admin with setup instructions
+- **📊 Debug Information**: Detailed content chunks and analysis breakdown for troubleshooting
+
+### Enhanced User Experience
+- **✨ Professional Results Display**: Section headers with icons, structured content layout, and consistent styling
+- **🎚️ Processing Options**: Choose to run fan-out analysis with entity extraction or run fan-out analysis only
+- **🔍 Content Analysis Summary**: Shows number of semantic chunks extracted with visual indicators
+- **❓ Follow-up Questions**: Displays potential user questions after reading content
+- **🎯 Entity-Specific Analysis**: Tailored analysis based on detected primary entities
+
+### Settings & Configuration
+- **🔑 Gemini API Key Management**: New admin setting for Google Gemini API key with direct link to Google AI Studio
+- **🛠️ Flexible Feature Toggle**: Enable fan-out analysis alongside existing features or use independently
+- **📋 Enhanced Admin Documentation**: Updated usage instructions and feature previews in WordPress admin
+- **🔧 Backward Compatibility**: All existing features remain unchanged and fully functional
+
 ## [1.7.2] - 2024-12-19
 
 ### Fixed
@@ -899,7 +936,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **More robust main topic and entity extraction**: For intersectional/compound topics.
 
-## [1.7.2] - 2024-06-21
+## [1.7.3] - 2025-07-02
 
 ### Fixed
 - **Always includes capitalized n-grams (e.g., 'Higher Education')**: From title/meta/headings/URL as entities, ensuring core topics are never missed.
