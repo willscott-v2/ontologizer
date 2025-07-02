@@ -1,8 +1,8 @@
 <div class="ontologizer-container">
     <div class="ontologizer-form">
-        <h3><?php echo esc_html($atts['title']); ?></h3>
+        <h3><?php echo esc_html($title); ?></h3>
         <p class="ontologizer-description">
-            Enter a URL to automatically extract named entities and generate structured data markup.
+            Enter a URL to automatically extract named entities and generate structured data markup, or paste content directly for analysis.
         </p>
         
         <form id="ontologizer-form">
@@ -14,11 +14,16 @@
                 <input type="url" 
                        id="ontologizer-url" 
                        name="url" 
-                       placeholder="<?php echo esc_attr($atts['placeholder']); ?>" 
+                       placeholder="<?php echo esc_attr($placeholder); ?>" 
                        class="ontologizer-input">
             </div>
             <div class="form-group" id="paste-input-group" style="display:none;">
-                <textarea id="ontologizer-paste" name="paste_content" rows="10" class="ontologizer-input" placeholder="Paste webpage content here..."></textarea>
+                <label for="ontologizer-paste">Paste Content (supports HTML, Markdown, or Plain Text):</label>
+                <textarea id="ontologizer-paste" 
+                          name="paste_content" 
+                          rows="12" 
+                          class="ontologizer-input" 
+                          placeholder="Paste content here...&#10;&#10;✓ HTML: Copy webpage source or article HTML&#10;✓ Markdown: Paste from docs, GitHub, or markdown files&#10;✓ Plain Text: Copy article text with basic formatting&#10;&#10;The system will automatically detect the format and extract entities accordingly."></textarea>
             </div>
             <div class="form-group">
                 <label for="main-topic-strategy">Main Topic Selection:</label>
@@ -47,6 +52,10 @@
                 </span>
             </button>
         </form>
+        
+        <div class="ontologizer-version">
+            <small>Ontologizer v<?php echo esc_html(ONTOLOGIZER_VERSION); ?></small>
+        </div>
     </div>
     
     <div id="ontologizer-results" class="ontologizer-results" style="display: none;">

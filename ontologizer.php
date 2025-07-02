@@ -3,9 +3,9 @@
  * Plugin Name: Ontologizer
  * Plugin URI: https://github.com/willscott-v2/ontologizer
  * Description: Automatically extract named entities from webpages and enrich them with structured identifiers from Wikipedia, Wikidata, Google's Knowledge Graph, and ProductOntology.
- * Version: 1.14.0
+ * Version: 1.7.2
  * Author: Will Scott
- * License: GPL v2 or later
+ * License: MIT License
  * Text Domain: ontologizer
  */
 
@@ -15,9 +15,40 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('ONTOLOGIZER_VERSION', '1.14.0');
+define('ONTOLOGIZER_VERSION', '1.7.2');
 define('ONTOLOGIZER_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('ONTOLOGIZER_PLUGIN_PATH', plugin_dir_path(__FILE__));
+
+/**
+ * Helper function to increment version numbers
+ * Usage: ontologizer_increment_version('1.7.1', 'patch') -> '1.7.2'
+ *        ontologizer_increment_version('1.7.1', 'minor') -> '1.8.0'
+ *        ontologizer_increment_version('1.7.1', 'major') -> '2.0.0'
+ */
+function ontologizer_increment_version($current_version, $type = 'patch') {
+    $parts = explode('.', $current_version);
+    $major = intval($parts[0]);
+    $minor = intval($parts[1]);
+    $patch = intval($parts[2]);
+    
+    switch ($type) {
+        case 'major':
+            $major++;
+            $minor = 0;
+            $patch = 0;
+            break;
+        case 'minor':
+            $minor++;
+            $patch = 0;
+            break;
+        case 'patch':
+        default:
+            $patch++;
+            break;
+    }
+    
+    return "{$major}.{$minor}.{$patch}";
+}
 
 // Include required files
 require_once ONTOLOGIZER_PLUGIN_PATH . 'includes/class-ontologizer-processor.php';
@@ -62,6 +93,12 @@ class Ontologizer {
         if (!get_option('ontologizer_rate_limit_delay')) {
             add_option('ontologizer_rate_limit_delay', 0.2);
         }
+        if (!get_option('ontologizer_debug_mode')) {
+            add_option('ontologizer_debug_mode', false);
+        }
+        if (!get_option('ontologizer_max_entities')) {
+            add_option('ontologizer_max_entities', 20);
+        }
         
         // Flush rewrite rules
         flush_rewrite_rules();
@@ -94,6 +131,16 @@ class Ontologizer {
             'default' => 0.2,
             'sanitize_callback' => 'floatval'
         ));
+        register_setting('ontologizer_options', 'ontologizer_debug_mode', array(
+            'type' => 'boolean',
+            'default' => false,
+            'sanitize_callback' => 'rest_sanitize_boolean'
+        ));
+        register_setting('ontologizer_options', 'ontologizer_max_entities', array(
+            'type' => 'integer',
+            'default' => 20,
+            'sanitize_callback' => 'intval'
+        ));
         
         // Add settings sections
         add_settings_section(
@@ -107,6 +154,13 @@ class Ontologizer {
             'ontologizer_performance_section',
             __('Performance Settings', 'ontologizer'),
             array($this, 'performance_section_callback'),
+            'ontologizer_options'
+        );
+        
+        add_settings_section(
+            'ontologizer_debug_section',
+            __('Debug Settings', 'ontologizer'),
+            array($this, 'debug_section_callback'),
             'ontologizer_options'
         );
         
@@ -142,6 +196,22 @@ class Ontologizer {
             'ontologizer_options',
             'ontologizer_performance_section'
         );
+        
+        add_settings_field(
+            'ontologizer_debug_mode',
+            __('Debug Mode', 'ontologizer'),
+            array($this, 'debug_mode_callback'),
+            'ontologizer_options',
+            'ontologizer_debug_section'
+        );
+        
+        add_settings_field(
+            'ontologizer_max_entities',
+            __('Max Entities to Enrich', 'ontologizer'),
+            array($this, 'max_entities_callback'),
+            'ontologizer_options',
+            'ontologizer_performance_section'
+        );
     }
     
     public function api_section_callback() {
@@ -150,6 +220,10 @@ class Ontologizer {
     
     public function performance_section_callback() {
         echo '<p>' . __('Configure performance settings for optimal operation.', 'ontologizer') . '</p>';
+    }
+    
+    public function debug_section_callback() {
+        echo '<p>' . __('Configure debugging settings.', 'ontologizer') . '</p>';
     }
     
     public function openai_key_callback() {
@@ -176,13 +250,26 @@ class Ontologizer {
         echo '<p class="description">' . __('Delay between API calls to avoid rate limiting (0-5 seconds). Default: 0.2s', 'ontologizer') . '</p>';
     }
     
+    public function debug_mode_callback() {
+        $value = get_option('ontologizer_debug_mode', false);
+        echo '<input type="checkbox" id="ontologizer_debug_mode" name="ontologizer_debug_mode" value="1" ' . checked($value, true, false) . '>';
+        echo '<p class="description">' . __('Enable debugging mode.', 'ontologizer') . '</p>';
+    }
+    
+    public function max_entities_callback() {
+        $value = get_option('ontologizer_max_entities', 20);
+        echo '<input type="number" id="ontologizer_max_entities" name="ontologizer_max_entities" value="' . esc_attr($value) . '" class="small-text" min="1" max="100">';
+        echo '<p class="description">' . __('Maximum number of entities to enrich.', 'ontologizer') . '</p>';
+    }
+    
     public function enqueue_scripts() {
         wp_enqueue_script('ontologizer-frontend', ONTOLOGIZER_PLUGIN_URL . 'assets/js/frontend.js', array('jquery'), ONTOLOGIZER_VERSION, true);
         wp_enqueue_style('ontologizer-frontend', ONTOLOGIZER_PLUGIN_URL . 'assets/css/frontend.css', array(), ONTOLOGIZER_VERSION);
         
         wp_localize_script('ontologizer-frontend', 'ontologizer_ajax', array(
             'ajax_url' => admin_url('admin-ajax.php'),
-            'nonce' => wp_create_nonce('ontologizer_nonce')
+            'nonce' => wp_create_nonce('ontologizer_nonce'),
+            'version' => ONTOLOGIZER_VERSION
         ));
     }
     
@@ -222,6 +309,10 @@ class Ontologizer {
             'placeholder' => __('Enter a URL to analyze...', 'ontologizer')
         ), $atts);
         
+        // Make attributes available to the template
+        $title = $atts['title'];
+        $placeholder = $atts['placeholder'];
+        
         ob_start();
         include ONTOLOGIZER_PLUGIN_PATH . 'templates/frontend-form.php';
         return ob_get_clean();
@@ -233,6 +324,8 @@ class Ontologizer {
         $paste_content = isset($_POST['paste_content']) ? trim(stripslashes($_POST['paste_content'])) : '';
         $main_topic_strategy = isset($_POST['main_topic_strategy']) ? sanitize_text_field($_POST['main_topic_strategy']) : 'strict';
         $clear_cache = isset($_POST['clear_cache']) && $_POST['clear_cache'] == 1;
+        $debug_mode = get_option('ontologizer_debug_mode', false);
+        $debug_info = [];
         if (empty($url) && empty($paste_content)) {
             wp_send_json_error(__('Please provide a URL or paste content.', 'ontologizer'));
         }
@@ -250,7 +343,12 @@ class Ontologizer {
             }
             wp_send_json_success($result);
         } catch (Exception $e) {
-            wp_send_json_error($e->getMessage());
+            if ($debug_mode) {
+                $debug_info[] = 'Exception: ' . $e->getMessage();
+                wp_send_json_error(['message' => $e->getMessage(), 'debug_info' => $debug_info]);
+            } else {
+                wp_send_json_error($e->getMessage());
+            }
         }
     }
 
@@ -318,4 +416,4 @@ class Ontologizer {
 }
 
 // Initialize the plugin
-new Ontologizer(); 
+new Ontologizer();  

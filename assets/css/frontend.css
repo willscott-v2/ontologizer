@@ -89,6 +89,20 @@
     to { transform: rotate(360deg); }
 }
 
+/* Version Number */
+.ontologizer-version {
+    text-align: center;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid #e1e5e9;
+}
+
+.ontologizer-version small {
+    color: #999;
+    font-size: 12px;
+    font-weight: 400;
+}
+
 /* Progress Indicator */
 .ontologizer-progress {
     background: #ffffff;

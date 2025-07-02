@@ -1,6 +1,6 @@
 # Ontologizer WordPress Plugin
 
-**Version: 1.13.0**
+**Version: 1.7.2**
 
 A powerful WordPress plugin that automatically extracts named entities and key topics from webpages, enriching them with structured identifiers from Wikipedia, Wikidata, Google's Knowledge Graph, and ProductOntology. Generate SEO-optimized JSON-LD structured data and receive content optimization recommendations.
 
@@ -140,6 +140,34 @@ ontologizer/
 - Sub-entity inclusion: Ensures important sub-entities (e.g., 'Higher Education') are included if present in title/meta/headings
 - Always includes capitalized n-grams (e.g., 'Higher Education') from title/meta/headings/URL as entities
 - Markdown export now includes the page title as a heading
+
+## Development
+
+### Version Management
+
+The plugin includes an automatic version incrementing script for development:
+
+```bash
+# Increment patch version (1.7.2 -> 1.7.3)
+php increment-version.php patch
+
+# Increment minor version (1.7.2 -> 1.8.0)
+php increment-version.php minor
+
+# Increment major version (1.7.2 -> 2.0.0)
+php increment-version.php major
+```
+
+The script automatically:
+- Updates the plugin header version
+- Updates the `ONTOLOGIZER_VERSION` constant
+- Updates the CHANGELOG.md version and date
+
+After running the script, remember to:
+1. Update CHANGELOG.md with your changes
+2. Repackage: `rm -f ontologizer.zip && zip -r ontologizer.zip ontologizer.php includes/ assets/ templates/ README.md LICENSE CHANGELOG.md ROADMAP.md install.php`
+3. Test the updated plugin
+4. Commit your changes
 
 ## Changelog
 

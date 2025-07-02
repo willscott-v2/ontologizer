@@ -57,13 +57,31 @@ jQuery(document).ready(function($) {
                 if (response.success) {
                     displayResults(response.data);
                 } else {
-                    showError(response.data || 'An error occurred while processing the request');
+                    // Better error handling for object responses
+                    let errorMessage = 'An error occurred while processing the request';
+                    if (response.data) {
+                        if (typeof response.data === 'string') {
+                            errorMessage = response.data;
+                        } else if (typeof response.data === 'object') {
+                            errorMessage = response.data.message || JSON.stringify(response.data);
+                        }
+                    }
+                    showError(errorMessage);
                 }
             },
             error: function(xhr, status, error) {
                 let errorMessage = 'Network error. Please try again.';
                 
-                if (status === 'timeout') {
+                // Try to parse detailed error from response
+                if (xhr.responseJSON && xhr.responseJSON.data) {
+                    if (typeof xhr.responseJSON.data === 'string') {
+                        errorMessage = xhr.responseJSON.data;
+                    } else if (typeof xhr.responseJSON.data === 'object') {
+                        errorMessage = xhr.responseJSON.data.message || JSON.stringify(xhr.responseJSON.data);
+                    }
+                } else if (xhr.responseText) {
+                    errorMessage = xhr.responseText;
+                } else if (status === 'timeout') {
                     errorMessage = 'Request timed out. The content might be too complex or the server is slow.';
                 } else if (xhr.status === 403) {
                     errorMessage = 'Access denied.';
@@ -179,59 +197,69 @@ jQuery(document).ready(function($) {
     }
     
     function displayResults(data) {
-        // Clear previous stats before adding new ones
-        $('.processing-stats, .ontologizer-cache-indicator').remove();
-        $('#ontologizer-salience-score-container').empty().hide();
+        try {
+            // Clear previous stats before adding new ones
+            $('.processing-stats, .ontologizer-cache-indicator').remove();
+            $('#ontologizer-salience-score-container').empty().hide();
 
-        // Display entities
-        displayEntities(data.entities);
-        
-        // Display JSON-LD
-        displayJsonLd(data.json_ld);
-        
-        // New: get tips and irrelevantEntities from data if present
-        const tips = data.salience_tips || [];
-        const irrelevantEntities = data.irrelevant_entities || [];
-        displayRecommendations(data.recommendations, tips, irrelevantEntities);
-        
-        // Display processing stats and salience score
-        displayStats(data);
-        if (typeof data.topical_salience !== 'undefined') {
-            displaySalienceScore(data.topical_salience, data.primary_topic);
-        }
-        
-        // Show results
-        $('#ontologizer-results').show();
-        
-        // Add cache indicator if necessary
-        if (data.cached) {
-            $('.results-header').append('<div class="ontologizer-cache-indicator"><span class="dashicons dashicons-database"></span> Cached Result</div>');
-        }
-        
-        // Scroll to results
-        $('html, body').animate({
-            scrollTop: $('#ontologizer-results').offset().top - 50
-        }, 500);
-        
-        // Store last data for download
-        window.lastOntologizerData = data;
-        const origDisplayResults = displayResults;
-        window.displayResults = function(data) {
+            // Validate data structure
+            if (!data || typeof data !== 'object') {
+                throw new Error('Invalid data structure received');
+            }
+
+            // Display entities
+            displayEntities(data.entities || []);
+            
+            // Display JSON-LD
+            displayJsonLd(data.json_ld || {});
+            
+            // New: get tips and irrelevantEntities from data if present
+            const tips = data.salience_tips || [];
+            const irrelevantEntities = data.irrelevant_entities || [];
+            displayRecommendations(data.recommendations || [], tips, irrelevantEntities);
+            
+            // Display processing stats and salience score
+            displayStats(data);
+            if (typeof data.topical_salience !== 'undefined') {
+                displaySalienceScore(data.topical_salience, data.primary_topic);
+            }
+            
+            // Show results
+            $('#ontologizer-results').show();
+            
+            // Add cache indicator if necessary
+            if (data.cached) {
+                $('.results-header').append('<div class="ontologizer-cache-indicator"><span class="dashicons dashicons-database"></span> Cached Result</div>');
+            }
+            
+            // Scroll to results
+            $('html, body').animate({
+                scrollTop: $('#ontologizer-results').offset().top - 50
+            }, 500);
+            
+            // Store last data for download
             window.lastOntologizerData = data;
-            origDisplayResults(data);
-            // Add Download as Markdown button only after results are shown
-            if ($('#ontologizer-download-md').length === 0) {
-                $('.results-header').append('<button id="ontologizer-download-md" class="copy-button" style="background:#007cba;margin-left:10px;">Download as Markdown</button>');
-            }
-            $('#ontologizer-download-md').prop('disabled', false);
-            // Add or update debug section
-            if ($('#ontologizer-md-debug').length === 0) {
-                $('.results-header').append('<pre id="ontologizer-md-debug" style="background:#f8f8f8;border:1px solid #ccc;padding:10px;margin-top:10px;max-width:100%;overflow-x:auto;font-size:12px;"></pre>');
-            }
-            $('#ontologizer-md-debug').text(JSON.stringify(data, null, 2));
-            // Debug log
-            console.log('Ontologizer Markdown Export Data:', data);
-        };
+            const origDisplayResults = displayResults;
+            window.displayResults = function(data) {
+                window.lastOntologizerData = data;
+                origDisplayResults(data);
+                // Add Download as Markdown button only after results are shown
+                if ($('#ontologizer-download-md').length === 0) {
+                    $('.results-header').append('<button id="ontologizer-download-md" class="copy-button" style="background:#007cba;margin-left:10px;">Download as Markdown</button>');
+                }
+                $('#ontologizer-download-md').prop('disabled', false);
+                // Add or update debug section
+                if ($('#ontologizer-md-debug').length === 0) {
+                    $('.results-header').append('<pre id="ontologizer-md-debug" style="background:#f8f8f8;border:1px solid #ccc;padding:10px;margin-top:10px;max-width:100%;overflow-x:auto;font-size:12px;"></pre>');
+                }
+                $('#ontologizer-md-debug').text(JSON.stringify(data, null, 2));
+                // Debug log
+                console.log('Ontologizer Markdown Export Data:', data);
+            };
+        } catch (error) {
+            console.error('Error displaying results:', error);
+            showError('Error displaying results: ' + error.message + '. Please check the console for details.');
+        }
     }
     
     function displayEntities(entities) {
@@ -477,6 +505,7 @@ jQuery(document).ready(function($) {
         if (typeof data.processing_time !== 'undefined') md += `**Processing Time:** ${data.processing_time.toFixed(2)}s\n`;
         if (typeof data.entities_count !== 'undefined') md += `**Entities Found:** ${data.entities_count}\n`;
         if (typeof data.enriched_count !== 'undefined') md += `**Enriched Entities:** ${data.enriched_count}\n`;
+        md += `**Version:** ${ontologizer_ajax.version || '1.44.3'}\n`;
         md += '\n---\n';
         // Entities
         md += `\n## Entities\n`;
