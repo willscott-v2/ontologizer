@@ -94,12 +94,10 @@ class OntologizerProcessor {
             $entities = $extraction_result; // fallback for basic extraction
             $openai_main_topic = '';
         }
-        error_log(sprintf('Ontologizer: Entity extraction took %.2f seconds.', microtime(true) - $start_time));
         
         // Step 3: Enrich entities with external data
         $start_time = microtime(true);
         $enriched_entities = $this->enrich_entities($entities);
-        error_log(sprintf('Ontologizer: Entity enrichment took %.2f seconds.', microtime(true) - $start_time));
         
         // Step 4: Generate JSON-LD schema
         $json_ld = $this->generate_json_ld($enriched_entities, $url, $html_content);
@@ -107,7 +105,6 @@ class OntologizerProcessor {
         // Step 5: Analyze content and provide recommendations
         $start_time = microtime(true);
         $recommendations = $this->analyze_content($html_content, $enriched_entities, $json_ld);
-        error_log(sprintf('Ontologizer: Recommendation generation took %.2f seconds.', microtime(true) - $start_time));
         
         // Step 6: Calculate Topical Salience Score
         $topical_salience = $this->calculate_topical_salience_score($enriched_entities);
@@ -117,7 +114,6 @@ class OntologizerProcessor {
         
         // Only use complex PHP logic as fallback if OpenAI didn't provide a main topic
         if (empty($main_topic)) {
-            error_log('Ontologizer: OpenAI main topic empty, using PHP fallback logic');
             
             // Use first entity as basic fallback
             $main_topic = $entities[0] ?? null;
@@ -161,7 +157,6 @@ class OntologizerProcessor {
                 }
             }
         } else {
-            error_log('Ontologizer: Using OpenAI main topic: "' . $main_topic . '"');
         }
         
         // Store final main topic in class property for context-aware enrichment
@@ -210,7 +205,6 @@ class OntologizerProcessor {
             }
         }
         if (!empty($forced_ngrams)) {
-            error_log('Ontologizer: Force-added n-grams: ' . implode(', ', $forced_ngrams));
         }
         $irrelevant_entities = [];
         foreach ($enriched_entities as $entity) {
@@ -229,7 +223,6 @@ class OntologizerProcessor {
         if ($run_fanout_analysis && !empty($this->api_keys['gemini'])) {
             $start_time = microtime(true);
             $fanout_analysis = $this->generate_fanout_analysis($html_content, $url);
-            error_log(sprintf('Ontologizer: Fan-out analysis took %.2f seconds.', microtime(true) - $start_time));
         }
 
         $result = array(
@@ -279,19 +272,16 @@ class OntologizerProcessor {
 
         // If the request fails, it might be due to SSL verification. Try again without it.
         if (is_wp_error($response)) {
-            error_log('Ontologizer: Request failed for ' . $url . '. Error: ' . $response->get_error_message() . '. Retrying without SSL verification.');
             $args['sslverify'] = false;
             $response = wp_remote_get($url, $args);
         }
         
         if (is_wp_error($response)) {
-            error_log('Ontologizer: Failed to fetch URL ' . $url . ' - ' . $response->get_error_message());
             return false;
         }
         
         $status_code = wp_remote_retrieve_response_code($response);
         if ($status_code !== 200) {
-            error_log('Ontologizer: HTTP ' . $status_code . ' for URL ' . $url);
             return false;
         }
         
@@ -543,7 +533,6 @@ Content:
         
         $json_body = json_encode($request_data);
         if ($json_body === false) {
-            error_log('Ontologizer: Failed to encode JSON for OpenAI request');
             return array();
         }
         
@@ -557,7 +546,6 @@ Content:
         ));
         
         if (is_wp_error($response)) {
-            error_log('Ontologizer: OpenAI API error - ' . $response->get_error_message());
             return array();
         }
         
@@ -580,8 +568,6 @@ Content:
                 }
                 
                 // Log what OpenAI extracted for debugging
-                error_log('Ontologizer: OpenAI extracted main topic: "' . ($content['main_topic'] ?? 'none') . '"');
-                error_log('Ontologizer: OpenAI extracted ' . count($content['entities']) . ' entities: ' . implode(', ', array_slice($content['entities'], 0, 10)));
                 
                 // Return both main topic and entities
                 return [
@@ -693,7 +679,6 @@ Content:
                 
                 if (!$already_exists) {
                     $enhanced_entities[] = $pattern;
-                    error_log("Ontologizer: Added topic-specific entity: '$pattern'");
                 }
             }
         }
@@ -732,7 +717,6 @@ Content:
         foreach ($entities as $index => $entity) {
             // Filter out entities longer than 5 words
             if (str_word_count($entity) > 5) {
-                error_log("Ontologizer: Filtered long entity: '$entity'");
                 continue;
             }
             
@@ -749,7 +733,6 @@ Content:
             $is_unlikely_wikipedia = false;
             foreach ($unlikely_wikipedia_patterns as $pattern) {
                 if (preg_match($pattern, $entity_lower)) {
-                    error_log("Ontologizer: Skipped entity unlikely to have Wikipedia page: '$entity'");
                     $is_unlikely_wikipedia = true;
                     break;
                 }
@@ -767,7 +750,6 @@ Content:
                 }
             }
             if ($is_non_entity) {
-                error_log("Ontologizer: Filtered non-entity: '$entity'");
                 continue;
             }
             
@@ -775,7 +757,6 @@ Content:
             $template_entities = ['semrush', 'google analytics', 'facebook', 'twitter', 'linkedin', 'instagram', 
                                 'youtube', 'pinterest', 'tiktok', 'snapchat', 'subscribe', 'newsletter', 'rss'];
             if (in_array($entity_lower, $template_entities)) {
-                error_log("Ontologizer: Filtered template entity: '$entity'");
                 continue;
             }
             
@@ -783,7 +764,6 @@ Content:
             $generic_entities = ['domestic', 'international', 'private', 'public', 'service', 'services', 
                                'location', 'locations', 'type', 'types', 'area', 'areas'];
             if (in_array($entity_lower, $generic_entities) && str_word_count($entity) === 1) {
-                error_log("Ontologizer: Filtered generic entity: '$entity'");
                 continue;
             }
             // Check cache first for high-quality entities
@@ -846,7 +826,6 @@ Content:
             
             // Circuit breaker: stop processing if we've enriched enough entities
             if ($successful_enrichments >= $dynamic_max) {
-                error_log("Ontologizer: Circuit breaker activated - stopping after $successful_enrichments successful enrichments ($cache_hits cache hits)");
                 break;
             }
             
@@ -901,7 +880,6 @@ Content:
         
         $response = wp_remote_get($search_url, array('timeout' => 8)); // Reduced timeout
         if (is_wp_error($response)) {
-            error_log('Ontologizer: Wikipedia API error - ' . $response->get_error_message());
             return null;
         }
         
@@ -920,11 +898,9 @@ Content:
         $best_match = $this->find_best_wikipedia_match($entity, $titles, $urls);
         
         if ($best_match) {
-            error_log('Ontologizer: Found Wikipedia match for "' . $entity . '" -> "' . $best_match['title'] . '" (confidence: ' . $best_match['confidence'] . ')');
             return $best_match['url'];
         }
         
-        error_log('Ontologizer: No suitable Wikipedia match found for "' . $entity . '"');
         return null;
     }
     
@@ -949,7 +925,6 @@ Content:
         $best_match = $this->find_best_wikipedia_match($entity, $titles, $urls);
         
         if ($best_match && $best_match['confidence'] >= 65) {
-            error_log('Ontologizer: Found Wikipedia match for "' . $entity . '" -> "' . $best_match['title'] . '" (confidence: ' . $best_match['confidence'] . ')');
             return $best_match['url'];
         }
         
@@ -989,7 +964,6 @@ Content:
                     foreach ($forbidden_patterns as $forbidden) {
                         if (strpos($title_lower, $forbidden) !== false) {
                             $is_semantic_mismatch = true;
-                            error_log("Ontologizer: Semantic mismatch detected: '$entity' should not match '$title'");
                             break 2;
                         }
                     }
@@ -1026,7 +1000,6 @@ Content:
             }
             
             if ($is_irrelevant) {
-                error_log("Ontologizer: Skipping irrelevant Wikipedia match: '$title' for entity '$entity'");
                 continue;
             }
             
@@ -1218,7 +1191,6 @@ Content:
         
         $response = wp_remote_get($api_url, array('timeout' => 6)); // Reduced timeout
         if (is_wp_error($response)) {
-            error_log('Ontologizer: Wikipedia API error for Wikidata lookup - ' . $response->get_error_message());
             return null;
         }
         
@@ -1232,7 +1204,6 @@ Content:
                     
                     // For airport entities, be more lenient with verification
                     if (strpos(strtolower($page_title), 'airport') !== false) {
-                        error_log('Ontologizer: Found Wikidata ID for airport "' . $page_title . '" -> ' . $wikidata_id);
                         return 'https://www.wikidata.org/wiki/' . $wikidata_id;
                     }
                     
@@ -1240,7 +1211,6 @@ Content:
                     if ($this->verify_wikidata_entity($wikidata_id, $page_title)) {
                         return 'https://www.wikidata.org/wiki/' . $wikidata_id;
                     } else {
-                        error_log('Ontologizer: Wikidata verification failed for "' . $page_title . '" -> ' . $wikidata_id);
                     }
                 }
             }
@@ -1272,7 +1242,6 @@ Content:
 
             $response = wp_remote_get($api_url, array('timeout' => 8)); // Reduced timeout
             if (is_wp_error($response)) {
-                error_log('Ontologizer: Wikidata API error - ' . $response->get_error_message());
                 continue; // Try next search term
             }
 
@@ -1309,7 +1278,6 @@ Content:
             
             // Stricter confidence threshold - raised from 60 to 75
             if ($best_score >= 75 && $best_match) {
-                error_log('Ontologizer: Found Wikidata match for "' . $entity . '" -> "' . $best_match['label'] . '" (confidence: ' . $best_score . ')');
                 return 'https://www.wikidata.org/wiki/' . $best_match['id'];
             }
         }
@@ -1334,14 +1302,12 @@ Content:
         $full_text = $label_lower . ' ' . strtolower($description);
         foreach ($academic_patterns as $pattern) {
             if (preg_match($pattern, $full_text)) {
-                error_log("Ontologizer: Wikidata semantic mismatch: '$entity_lower' rejected due to academic/specific content in '$label_lower'");
                 return true;
             }
         }
         
         // Filter out overly long research paper titles
         if (strlen($label_lower) > 100 && str_word_count($label_lower) > 10) {
-            error_log("Ontologizer: Wikidata semantic mismatch: '$entity_lower' rejected due to overly long label '$label_lower'");
             return true;
         }
         
@@ -1421,7 +1387,6 @@ Content:
             
             $response = wp_remote_get($api_url, array('timeout' => 6)); // Reduced timeout
             if (is_wp_error($response)) {
-                error_log('Ontologizer: Google KG API error - ' . $response->get_error_message());
                 return $this->get_google_search_fallback_url($entity);
             }
 
@@ -1455,7 +1420,6 @@ Content:
                 if ($best_score >= 60 && $best_match && isset($best_match['@id'])) {
                     $kgid = $best_match['@id'];
                     $mid = str_replace('kg:', '', $kgid);
-                    error_log('Ontologizer: Found Google KG match for "' . $entity . '" -> "' . $best_match['name'] . '" (confidence: ' . $best_score . ')');
                     return 'https://www.google.com/search?kgmid=' . $mid;
                 }
             }
@@ -3075,7 +3039,6 @@ Content:
         
         $json_body = json_encode($request_data);
         if ($json_body === false) {
-            error_log('Ontologizer: Failed to encode JSON for OpenAI request');
             return array();
         }
         
@@ -3089,7 +3052,6 @@ Content:
         ));
 
         if (is_wp_error($response)) {
-            error_log('Ontologizer: OpenAI API error - ' . $response->get_error_message());
             return $this->analyze_content_fallback($html_content, $enriched_entities, $json_ld); // Fallback to basic
         }
 
@@ -3309,12 +3271,10 @@ Content:
             $entities = $extraction_result; // fallback for basic extraction
             $openai_main_topic = '';
         }
-        error_log(sprintf('Ontologizer: Entity extraction (pasted %s) took %.2f seconds.', $content_type, microtime(true) - $start_time));
         
         // Step 3: Enrich entities with external data
         $start_time = microtime(true);
         $enriched_entities = $this->enrich_entities($entities);
-        error_log(sprintf('Ontologizer: Entity enrichment (pasted %s) took %.2f seconds.', $content_type, microtime(true) - $start_time));
         
         // Step 4: Generate JSON-LD schema
         $json_ld = $this->generate_json_ld($enriched_entities, '', $html_content);
@@ -3322,7 +3282,6 @@ Content:
         // Step 5: Analyze content and provide recommendations
         $start_time = microtime(true);
         $recommendations = $this->analyze_content($html_content, $enriched_entities, $json_ld);
-        error_log(sprintf('Ontologizer: Recommendation generation (pasted %s) took %.2f seconds.', $content_type, microtime(true) - $start_time));
         
         // Step 6: Calculate Topical Salience Score
         $topical_salience = $this->calculate_topical_salience_score($enriched_entities);
@@ -3332,7 +3291,6 @@ Content:
         
         // Only use complex PHP logic as fallback if OpenAI didn't provide a main topic
         if (empty($main_topic)) {
-            error_log('Ontologizer: OpenAI main topic empty for pasted content, using PHP fallback logic');
             
             // Use first entity as basic fallback
             $main_topic = $entities[0] ?? null;
@@ -3376,7 +3334,6 @@ Content:
                 }
             }
         } else {
-            error_log('Ontologizer: Using OpenAI main topic for pasted content: "' . $main_topic . '"');
         }
         
         $irrelevant_entities = [];
@@ -3397,7 +3354,6 @@ Content:
         if ($run_fanout_analysis && !empty($this->api_keys['gemini'])) {
             $start_time = microtime(true);
             $fanout_analysis = $this->generate_fanout_analysis($processed_content['html'], '');
-            error_log(sprintf('Ontologizer: Fan-out analysis took %.2f seconds.', microtime(true) - $start_time));
         }
         
         $result = array(
@@ -3441,17 +3397,14 @@ Content:
             $parsed = $this->parse_markdown_content($content);
             $html = $parsed['html'];
             $structured_text = $parsed['structured_text'];
-            error_log('Ontologizer: Detected markdown content');
         } elseif ($this->is_html_content($content)) {
             $type = 'html';
             $html = $content;
-            error_log('Ontologizer: Detected HTML content');
         } else {
             $type = 'plain_text';
             $parsed = $this->parse_plain_text_content($content);
             $html = $parsed['html'];
             $structured_text = $parsed['structured_text'];
-            error_log('Ontologizer: Detected plain text content');
         }
         
         return [
@@ -3731,7 +3684,6 @@ Content:
         $cached = get_transient($cache_key);
         
         if ($cached !== false) {
-            error_log("Ontologizer: Using cached data for entity: '$entity_name'");
             return $cached;
         }
         
@@ -3760,7 +3712,6 @@ Content:
             $cache_duration = 7 * DAY_IN_SECONDS; // Cache for 1 week
             
             set_transient($cache_key, $enriched_data, $cache_duration);
-            error_log("Ontologizer: Cached entity '$entity_name' with $total_sources sources and {$enriched_data['confidence_score']}% confidence");
         }
     }
     
@@ -3779,7 +3730,6 @@ Content:
             }
         }
         
-        error_log("Ontologizer: Cleared $cleared_count cached entities");
         return $cleared_count;
     }
     
@@ -5024,7 +4974,6 @@ Content:
         ));
         
         if (is_wp_error($response)) {
-            error_log('Ontologizer Gemini API Error: ' . $response->get_error_message());
             return array('error' => 'API request failed: ' . $response->get_error_message());
         }
         
@@ -5032,14 +4981,12 @@ Content:
         $body = wp_remote_retrieve_body($response);
         
         if ($status_code !== 200) {
-            error_log('Ontologizer Gemini API HTTP Error: ' . $status_code . ' - ' . $body);
             return array('error' => "API error: HTTP $status_code");
         }
         
         $data = json_decode($body, true);
         
         if (!$data || !isset($data['candidates'][0]['content']['parts'][0]['text'])) {
-            error_log('Ontologizer Gemini API Invalid Response: ' . $body);
             return array('error' => 'Invalid API response format');
         }
         

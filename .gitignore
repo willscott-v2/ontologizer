@@ -1,0 +1,64 @@
+# Mac system files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Logs
+*.log
+logs/
+
+# Environment files
+.env
+.env.local
+.env.production
+.env.staging
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# PHP specific
+vendor/
+composer.phar
+.phpunit.result.cache
+
+# WordPress specific
+wp-config-local.php
+wp-content/uploads/
+wp-content/cache/
+wp-content/backup-db/
+
+# Node modules
+node_modules/
+npm-debug.log*
+
+# Build artifacts
+*.zip
+ontologizer.zip
+
+# Version management
+.bumpversion.cfg
+
+# Analysis files
+structure.txt
+
+# Development scripts
+*_cleanup_debug.sh
+make_debug_conditional.sh

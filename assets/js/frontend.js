@@ -147,7 +147,6 @@ jQuery(document).ready(function($) {
                         $(this).hasClass('google-kg') ? 'Google KG' : 'ProductOntology';
         
         // Track link clicks (you can integrate with analytics here)
-        console.log('Entity link clicked:', linkType, $(this).attr('href'));
     });
     
     // Auto-resize textarea for JSON-LD
@@ -287,7 +286,6 @@ jQuery(document).ready(function($) {
                 }
                 $('#ontologizer-md-debug').text(JSON.stringify(data, null, 2));
                 // Debug log
-                console.log('Ontologizer Markdown Export Data:', data);
             };
         } catch (error) {
             console.error('Error displaying results:', error);
