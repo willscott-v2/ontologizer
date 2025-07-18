@@ -1,10 +1,10 @@
 # Ontologizer WordPress Plugin
 
-**Version: 1.8.0**
+**Version: 2.1.0**
 
 A powerful WordPress plugin that automatically extracts named entities and key topics from webpages, enriching them with structured identifiers from Wikipedia, Wikidata, Google's Knowledge Graph, and ProductOntology. Generate SEO-optimized JSON-LD structured data and receive content optimization recommendations.
 
-**🆕 NEW in v1.8.0**: Google AI Mode Query Fan-out Analysis - Predict how Google's AI might decompose user queries about your content with beautiful, structured visual insights!
+**🆕 NEW in v2.1.0**: Google AI Mode Query Fan-out Analysis - Predict how Google's AI might decompose user queries about your content with beautiful, structured visual insights!
 
 For a detailed list of changes, see the [CHANGELOG.md](CHANGELOG.md) file.
 
@@ -170,7 +170,7 @@ The plugin includes an automatic version incrementing script for development:
 # Increment patch version (1.7.2 -> 1.7.3)
 php increment-version.php patch
 
-# Increment minor version (1.7.2 -> 1.8.0)
+# Increment minor version (1.7.2 -> 2.1.0)
 php increment-version.php minor
 
 # Increment major version (1.7.2 -> 2.0.0)
