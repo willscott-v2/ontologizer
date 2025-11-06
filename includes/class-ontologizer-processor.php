@@ -4952,8 +4952,8 @@ Content:
             return array('error' => 'Gemini API key is empty or not configured');
         }
         
-        // Use v1beta endpoint (v1 doesn't support gemini-1.5-flash)
-        $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" . urlencode($api_key);
+        // Use v1beta endpoint with Gemini 2.0 (Gemini 1.5 models retired)
+        $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=" . urlencode($api_key);
         
         $request_data = array(
             'contents' => array(
@@ -4986,9 +4986,9 @@ Content:
         $status_code = wp_remote_retrieve_response_code($response);
         $body = wp_remote_retrieve_body($response);
         
-        // If gemini-1.5-flash fails, try gemini-pro as fallback
+        // If gemini-2.0-flash-exp fails, try stable gemini-2.0-flash as fallback
         if ($status_code === 404) {
-            $url_fallback = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" . urlencode($api_key);
+            $url_fallback = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" . urlencode($api_key);
             $response_fallback = wp_remote_post($url_fallback, array(
                 'timeout' => 60,
                 'headers' => array(
