@@ -95,6 +95,7 @@ Use the shortcode `[ontologizer]` in any post or page:
 - **Required for Google AI Mode Query Fan-out Analysis**
 - Used to predict how Google's AI might decompose user queries about your content
 - Get your API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
+- Uses Gemini 2.0 models (gemini-2.0-flash-exp with fallback to gemini-2.0-flash)
 - Without this key, fan-out analysis features will not be available
 
 ### Google Knowledge Graph API (Optional)

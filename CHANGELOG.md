@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - 2025-11-06
+
+### Fixed
+- **Google Gemini API Model Updates**: Updated to use current Gemini 2.0 models after Gemini 1.5 series retirement
+  - Primary model: gemini-2.0-flash-exp (latest experimental)
+  - Fallback model: gemini-2.0-flash (stable version)
+  - Removed deprecated gemini-1.5-flash and gemini-pro models
+  - All models use v1beta endpoint exclusively
+  - Resolves 404 errors when using Google AI Mode for fan-out analysis
+
+### Technical Changes
+- Updated Gemini API integration to use only v1beta endpoint
+- Added model fallback chain: gemini-2.0-flash-exp → gemini-2.0-flash
+- Improved error messages for better debugging of API issues
+- Updated documentation to reflect Gemini 2.0 model usage
+
 ## [1.8.0] - 2024-12-19
 
 ### Major Feature: Google AI Mode Query Fan-out Analysis
@@ -24,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Technical Implementation
 - **🔧 Semantic Content Chunking**: Layout-aware extraction of primary topics, sections, lists, and structured data
-- **🤖 Gemini API Integration**: Full integration with Google's Gemini 1.5 Flash model for AI analysis
+- **🤖 Gemini API Integration**: Full integration with Google's Gemini 2.0 models for AI analysis
 - **⚙️ Flexible Processing Options**: Run fan-out analysis alongside existing features or as standalone analysis
 - **🗂️ Admin Configuration**: New Gemini API key field in WordPress admin with setup instructions
 - **📊 Debug Information**: Detailed content chunks and analysis breakdown for troubleshooting
