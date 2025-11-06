@@ -4947,6 +4947,12 @@ Content:
      */
     private function call_gemini_api($prompt) {
         $api_key = $this->api_keys['gemini'];
+        
+        if (empty($api_key)) {
+            return array('error' => 'Gemini API key is empty or not configured');
+        }
+        
+        // Use v1beta endpoint (v1 doesn't support gemini-1.5-flash)
         $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" . urlencode($api_key);
         
         $request_data = array(
@@ -4980,14 +4986,55 @@ Content:
         $status_code = wp_remote_retrieve_response_code($response);
         $body = wp_remote_retrieve_body($response);
         
+        // If gemini-1.5-flash fails, try gemini-pro as fallback
+        if ($status_code === 404) {
+            $url_fallback = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" . urlencode($api_key);
+            $response_fallback = wp_remote_post($url_fallback, array(
+                'timeout' => 60,
+                'headers' => array(
+                    'Content-Type' => 'application/json'
+                ),
+                'body' => json_encode($request_data)
+            ));
+            
+            if (!is_wp_error($response_fallback)) {
+                $status_code = wp_remote_retrieve_response_code($response_fallback);
+                $body = wp_remote_retrieve_body($response_fallback);
+            }
+        }
+        
         if ($status_code !== 200) {
-            return array('error' => "API error: HTTP $status_code");
+            // Parse error response for more details
+            $error_data = json_decode($body, true);
+            $error_message = "API error: HTTP $status_code";
+            
+            if ($error_data && isset($error_data['error'])) {
+                if (isset($error_data['error']['message'])) {
+                    $error_message .= ' - ' . $error_data['error']['message'];
+                } elseif (isset($error_data['error']['status'])) {
+                    $error_message .= ' - ' . $error_data['error']['status'];
+                }
+            } elseif (!empty($body)) {
+                // Include first 200 chars of response body for debugging
+                $error_message .= ' - Response: ' . substr(strip_tags($body), 0, 200);
+            }
+            
+            // Add helpful troubleshooting info for common errors
+            if ($status_code === 404) {
+                $error_message .= ' (Check: API key is valid, model name is correct, endpoint URL is current)';
+            } elseif ($status_code === 400) {
+                $error_message .= ' (Check: Request format is correct, prompt is not too long)';
+            } elseif ($status_code === 401 || $status_code === 403) {
+                $error_message .= ' (Check: API key is valid and has proper permissions)';
+            }
+            
+            return array('error' => $error_message);
         }
         
         $data = json_decode($body, true);
         
         if (!$data || !isset($data['candidates'][0]['content']['parts'][0]['text'])) {
-            return array('error' => 'Invalid API response format');
+            return array('error' => 'Invalid API response format. Response: ' . substr($body, 0, 200));
         }
         
         $analysis = $data['candidates'][0]['content']['parts'][0]['text'];
